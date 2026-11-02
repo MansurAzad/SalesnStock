@@ -1,0 +1,69 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1793553578084,
+      "tag": "0000_migration",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793555566951,
+      "tag": "0001_finance_employees_branding",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793556197615,
+      "tag": "0002_sale_seq_no",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793556473330,
+      "tag": "0003_profile_print_lang",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793556723380,
+      "tag": "0004_purchases_discounts_expenses_returns",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793556754139,
+      "tag": "0005_installment_cancel_fix",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793557953839,
+      "tag": "0006_purchase_doc_no_partner_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793562773904,
+      "tag": "0007_offline_sync_queue",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793564000000,
+      "tag": "0008_disallow_manual_expense_transactions",
+      "breakpoints": true
+    }
+  ]
+}

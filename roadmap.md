@@ -1,0 +1,14 @@
+# Roadmap
+- [x] Phase 1: auth/roles/branches, IMEI stock & transfers, POS, installments, accounts
+- [x] Reports with filters, CSV, printable PDF
+- [x] Third-party finance, employees & attendance, labels, branding, camera scan
+- [x] Printable receipt/voucher/invoice/pad with account-level print language
+- [x] AI insights for sales & inventory
+- [x] Purchases: suppliers, goods receive (scan / Excel paste), supplier due, payments, purchase return
+- [x] Discount policy: per-branch max %, reason required, manager approval above limit or below cost
+- [x] Expenses & petty cash with per-branch approval limit
+- [x] Sale return / cancellation (no deletes), audit log viewer
+- [x] Printed purchase receipts (PUR-000001 numbers, branding)
+- [x] Finance partner ledger + pay/receive from Accounts into cash balance
+- [ ] Load real branches & stock, live test purchase/expense/return as Super Admin — waiting on real data from user
+- [x] Windows desktop app with offline POS, kisti, expenses and stock views + auto sync

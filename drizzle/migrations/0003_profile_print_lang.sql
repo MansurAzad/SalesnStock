@@ -1,0 +1,1 @@
+ALTER TABLE public.profiles ADD COLUMN print_lang text NOT NULL DEFAULT 'en' CHECK (print_lang IN ('en','bn'));
