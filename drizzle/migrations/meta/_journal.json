@@ -64,6 +64,62 @@
       "when": 1793564000000,
       "tag": "0008_disallow_manual_expense_transactions",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793642530372,
+      "tag": "0009_customers_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793642601836,
+      "tag": "0010_suppliers_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793642707875,
+      "tag": "0011_cancel_transfer",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793642859135,
+      "tag": "0012_update_pending_expense",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793643017498,
+      "tag": "0013_reverse_manual_transaction",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793643843271,
+      "tag": "0014_edit_pending_finance_cases",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793643931198,
+      "tag": "0015_revoke_user_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793644123298,
+      "tag": "0016_inventory_damage_workflow",
+      "breakpoints": true
     }
   ]
 }
