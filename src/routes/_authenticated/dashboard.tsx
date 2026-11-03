@@ -141,7 +141,7 @@ function Dashboard() {
   if ((data?.overdueCount ?? 0) > 0) {
     alerts.push({
       key: "overdue",
-      label: `${data?.overdueCount} kisti overdue`,
+      label: `${data?.overdueCount} ${t("kisti overdue")}`,
       detail: taka(data?.overdue),
       to: "/installments",
       danger: true,
@@ -150,7 +150,7 @@ function Dashboard() {
   if ((data?.lowStock?.length ?? 0) > 0) {
     alerts.push({
       key: "low",
-      label: `${data?.lowStock?.length} models below reorder level`,
+      label: `${data?.lowStock?.length} ${t("models below reorder level")}`,
       detail: (data?.lowStock ?? [])
         .slice(0, 3)
         .map((p) => `${p.brand} ${p.model} (${p.in_stock}/${p.min_stock})`)
@@ -162,7 +162,7 @@ function Dashboard() {
   if ((data?.pendingFinance ?? 0) > 0) {
     alerts.push({
       key: "finance",
-      label: `${data?.pendingFinance} finance cases pending`,
+      label: `${data?.pendingFinance} ${t("finance cases pending")}`,
       detail: taka(data?.pendingFinanceAmount),
       to: "/finance",
       danger: false,
@@ -171,7 +171,7 @@ function Dashboard() {
   if ((data?.pendingExpenses ?? 0) > 0) {
     alerts.push({
       key: "expense",
-      label: `${data?.pendingExpenses} expenses awaiting approval`,
+      label: `${data?.pendingExpenses} ${t("expenses awaiting approval")}`,
       detail: taka(data?.pendingExpenseAmount),
       to: "/expenses",
       danger: false,
@@ -209,7 +209,7 @@ function Dashboard() {
 
       {alerts.length > 0 && (
         <>
-          <h2 className="mb-3 mt-8 text-lg font-semibold">Needs attention</h2>
+          <h2 className="mb-3 mt-8 text-lg font-semibold">{t("Needs attention")}</h2>
           <div className="mb-8 grid gap-3 md:grid-cols-2">
             {alerts.map((a) => (
               <Link key={a.key} to={a.to}>
@@ -235,7 +235,7 @@ function Dashboard() {
 
       {data && data.ageing.length > 0 && (
         <>
-          <h2 className="mb-3 mt-8 text-lg font-semibold">Kisti ageing</h2>
+          <h2 className="mb-3 mt-8 text-lg font-semibold">{t("Kisti ageing")}</h2>
           <Card className="mb-8 p-4">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {data.ageing.map((a) => (
@@ -243,17 +243,19 @@ function Dashboard() {
                   <div className="rounded-md border p-3 transition-colors hover:border-primary/60">
                     <div className="text-xs uppercase text-muted-foreground">
                       {a.bucket === "overdue"
-                        ? "Overdue"
+                        ? t("Overdue")
                         : a.bucket === "next_30"
-                          ? "Next 30 days"
+                          ? t("Next 30 days")
                           : a.bucket === "next_60"
-                            ? "31–60 days"
-                            : "Later"}
+                            ? t("31–60 days")
+                            : t("Later")}
                     </div>
                     <div className="font-display text-lg font-semibold tabular">
                       {taka(a.total)}
                     </div>
-                    <div className="text-xs text-muted-foreground">{a.cnt} kistis</div>
+                    <div className="text-xs text-muted-foreground">
+                      {a.cnt} {t("kistis")}
+                    </div>
                   </div>
                 </Link>
               ))}
@@ -267,11 +269,11 @@ function Dashboard() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Invoice</TableHead>
+              <TableHead>{t("Invoice")}</TableHead>
               <TableHead>{t("Branch")}</TableHead>
-              <TableHead>Type</TableHead>
+              <TableHead>{t("Type")}</TableHead>
               <TableHead className="text-right">{t("Total")}</TableHead>
-              <TableHead className="text-right">Paid</TableHead>
+              <TableHead className="text-right">{t("Paid")}</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -289,7 +291,7 @@ function Dashboard() {
                     params={{ saleId: s.id }}
                     className="text-sm text-primary hover:underline"
                   >
-                    Receipt
+                    {t("Receipt")}
                   </Link>
                 </TableCell>
               </TableRow>
@@ -297,7 +299,7 @@ function Dashboard() {
             {data && data.recent.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  No sales this month yet.
+                  {t("No sales this month yet.")}
                 </TableCell>
               </TableRow>
             )}
@@ -307,15 +309,15 @@ function Dashboard() {
 
       {data && data.lowStock.length > 0 && (
         <>
-          <h2 className="mb-3 mt-8 text-lg font-semibold">Low stock</h2>
+          <h2 className="mb-3 mt-8 text-lg font-semibold">{t("Low stock")}</h2>
           <Card>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Product</TableHead>
-                  <TableHead className="text-right">In stock</TableHead>
-                  <TableHead className="text-right">Reorder at</TableHead>
-                  <TableHead className="text-right">Short by</TableHead>
+                  <TableHead>{t("Product")}</TableHead>
+                  <TableHead className="text-right">{t("In stock")}</TableHead>
+                  <TableHead className="text-right">{t("Reorder at")}</TableHead>
+                  <TableHead className="text-right">{t("Short by")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

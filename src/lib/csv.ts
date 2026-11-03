@@ -8,8 +8,9 @@ export function toCsv(rows: Record<string, unknown>[]): string {
     // Numbers stay numeric so Excel can total them; only text is quoted.
     if (typeof v === "number") return String(v);
     const s = String(v);
-    // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR).
-    const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+    // Neutralise spreadsheet formula injection (=, +, -, @). Excel skips leading
+    // spaces and tabs, so the check looks at the first character that matters.
+    const safe = /^[ \t\r\n]*[=+\-@]/.test(s) ? `'${s}` : s;
     return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
   return [

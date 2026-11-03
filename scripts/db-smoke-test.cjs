@@ -967,6 +967,17 @@ async function runAll(tx) {
     eq(entry.method, "cash", "the manual entry method");
   });
 
+  await step("a branch manager can add a manual income entry", async () => {
+    await as(tx, U.manager);
+    const rows = await tx`
+      select public.add_manual_income(${brA.id}, 'Service charge', 500, 'branch fee', 'cash') as id`;
+    assert(rows[0].id, "the branch manager income was not created");
+    await asDb(tx);
+    const [entry] = await tx`select * from public.transactions where id = ${rows[0].id}`;
+    eq(entry.kind, "income", "the branch manager entry kind");
+    near(entry.amount, 500, "the branch manager entry amount");
+  });
+
   await step("a salesman cannot add a manual income entry", async () => {
     await as(tx, U.salesA);
     await expectError(
@@ -1066,6 +1077,21 @@ async function runAll(tx) {
       "run_payroll",
       [brA.id, "2026-12", [staff[0].id], ""],
       "Not allowed to run payroll",
+    );
+  });
+
+  await step("a payroll salary cannot be reversed into income", async () => {
+    await asDb(tx);
+    const [salary] = await tx`
+      select * from public.transactions where category = 'Staff salary' order by created_at desc limit 1`;
+    assert(salary, "there is no payroll transaction to test");
+    await as(tx, U.manager);
+    await expectError(
+      tx,
+      "payroll reversal",
+      "reverse_manual_transaction",
+      [salary.id, "not allowed"],
+      "Only manual, unlinked entries can be reversed here",
     );
   });
 

@@ -103,12 +103,16 @@ function Receive({ branch }: { branch: string }) {
     .map((l) => l.trim())
     .filter(Boolean)
     .map((l) => {
-      const [a, b, c] = l.split(/[,\t;]/).map((x) => x.trim());
-      return {
-        imei: a ?? "",
-        imei2: b && !/^\d{1,7}(\.\d+)?$/.test(b) ? b : "",
-        cost: Number((c ?? (b && /^\d{1,7}(\.\d+)?$/.test(b) ? b : "")) || cost || 0),
-      };
+      const parts = l.split(/[,\t;]/).map((x) => x.trim());
+      const a = parts[0] ?? "";
+      const b = parts[1] ?? "";
+      const c = parts[2] ?? "";
+      // A second column that is a number is the cost; anything else is IMEI2.
+      const bIsNumber = b !== "" && Number.isFinite(Number(b));
+      const imei2 = b === "" || bIsNumber ? "" : b;
+      const costRaw = c !== "" ? c : bIsNumber ? b : "";
+      const cost = costRaw === "" ? Number(cost || 0) : Number(costRaw);
+      return { imei: a, imei2, cost };
     });
   const bad = lines.filter((l) => !isValidImei(l.imei));
   const total = lines.reduce((s, l) => s + l.cost, 0);
@@ -136,8 +140,16 @@ function Receive({ branch }: { branch: string }) {
       toast.error("Paid amount must be zero or more");
       return;
     }
-    if (lines.some((l) => !Number.isFinite(l.cost) || l.cost < 0)) {
+    if (lines.some((l) => !Number.isFinite(l.cost))) {
+      toast.error("A cost in the pasted rows is not a number");
+      return;
+    }
+    if (lines.some((l) => l.cost < 0)) {
       toast.error("Unit cost must be zero or more");
+      return;
+    }
+    if (paidNow > total) {
+      toast.error("Paid amount cannot be more than the total cost");
       return;
     }
     setBusy(true);
@@ -298,7 +310,7 @@ function History({ branch }: { branch: string }) {
   const [search, setSearch] = useState("");
   const [paying, setPaying] = useState<{ id: string; amount: string } | null>(null);
   const [payMethod, setPayMethod] = useState("cash");
-  const { data = [] } = useQuery({
+  const { data = [], error } = useQuery({
     queryKey: ["purchases", branch],
     enabled: !!branch,
     queryFn: async () => {
@@ -364,6 +376,11 @@ function History({ branch }: { branch: string }) {
 
   return (
     <Card>
+      {error && (
+        <p className="m-4 mb-0 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the purchase history: {error.message}
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="text-sm">
           Total supplier due: <b>{taka(totalDue)}</b>
@@ -525,8 +542,8 @@ function History({ branch }: { branch: string }) {
 function Suppliers({ branch }: { branch: string }) {
   const qc = useQueryClient();
   const { data: me } = useMe();
-  const { data = [] } = useSuppliers();
-  const { data: dues = [] } = useQuery({
+  const { data = [], error: suppliersError } = useSuppliers();
+  const { data: dues = [], error: duesError } = useQuery({
     queryKey: ["supplier-dues", branch],
     enabled: !!branch,
     queryFn: async () => {
@@ -598,6 +615,11 @@ function Suppliers({ branch }: { branch: string }) {
       .reduce((s, d) => s + Number(d.total) - Number(d.returned) - Number(d.paid), 0);
   return (
     <Card>
+      {(suppliersError || duesError) && (
+        <p className="m-4 mb-0 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the suppliers: {(suppliersError ?? duesError)?.message}
+        </p>
+      )}
       {me?.canWriteHq && (
         <div className="flex flex-wrap gap-2 p-4">
           <Input

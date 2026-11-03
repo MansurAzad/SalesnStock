@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/BranchPicker";
 import { roleLabel, useBranches, useMe } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
+import { HqOnly } from "@/components/HqOnly";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,8 +46,9 @@ function Users() {
   const { data: me } = useMe();
   const qc = useQueryClient();
   const { data: branches = [] } = useBranches();
-  const { data = [] } = useQuery({
+  const { data = [], error } = useQuery({
     queryKey: ["users"],
+    enabled: !!me?.isHq,
     queryFn: async () => {
       const [profiles, roleRows] = await Promise.all([
         fetchAllPages(supabase.from("profiles").select("*").order("created_at")),
@@ -141,134 +143,150 @@ function Users() {
     qc.invalidateQueries({ queryKey: ["users"] });
   }
 
-  const roles = Object.keys(roleLabel).filter(
-    (r) => r !== "super_admin" || me?.roles.includes("super_admin"),
-  );
+  const isSuper = !!me?.roles.includes("super_admin");
+  const anySuper = data.some((u) => u.roles.includes("super_admin"));
+  // Only a super admin manages super admins — but if the project has none, any
+  // HQ admin may appoint one, or nobody could ever reach the admin screens.
+  const roles = Object.keys(roleLabel).filter((r) => r !== "super_admin" || isSuper || !anySuper);
 
   return (
-    <div>
-      <PageHeader title={t("Users")} />
-      <p className="mb-4 text-sm text-muted-foreground">
-        Staff sign up themselves, then you assign their role and branch here. Showroom roles need a
-        branch.
-      </p>
-      <Input
-        className="mb-3 max-w-sm bg-card"
-        aria-label="Search users"
-        placeholder="Search name, email, role or branch"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <Card>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t("Name")}</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>{t("Role")}</TableHead>
-              <TableHead>{t("Branch")}</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.map((u) => {
-              const pending = pendingEdit(u);
-              const e = pending ?? { role: u.role, branch: u.branch_id ?? "none" };
-              const set = (patch: Partial<{ role: string; branch: string }>) =>
-                setEdits((current) => {
-                  const base = baseOf(u);
-                  const prev = current[u.id];
-                  const prevBase =
-                    prev && prev.base === base
-                      ? prev
-                      : { role: u.role, branch: u.branch_id ?? "none" };
-                  return { ...current, [u.id]: { ...prevBase, ...patch, base } };
-                });
-              return (
-                <TableRow key={u.id}>
-                  <TableCell className="font-medium">{u.full_name}</TableCell>
-                  <TableCell>{u.email}</TableCell>
-                  <TableCell>
-                    <Select
-                      value={e.role}
-                      onValueChange={(v) => set({ role: v })}
-                      disabled={!me?.canWriteHq}
-                    >
-                      <SelectTrigger className="w-48">
-                        <SelectValue placeholder="No role" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {roles.map((r) => (
-                          <SelectItem key={r} value={r}>
-                            {roleLabel[r]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {u.roles.length > 1 && (
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        Also:{" "}
-                        {u.roles
-                          .slice(1)
-                          .map((r) => roleLabel[r] ?? r)
-                          .join(", ")}
-                      </div>
-                    )}
-                    {u.roles.length === 0 && (
-                      <div className="mt-1 text-xs text-muted-foreground">Access revoked</div>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Select
-                      value={e.branch}
-                      onValueChange={(v) => set({ branch: v })}
-                      disabled={!me?.canWriteHq}
-                    >
-                      <SelectTrigger className="w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">— None (HQ) —</SelectItem>
-                        {branches.map((b) => (
-                          <SelectItem key={b.id} value={b.id}>
-                            {b.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell>
-                    {me?.canWriteHq && (
-                      <div className="flex gap-2">
-                        <Button size="sm" disabled={!pending} onClick={() => save(u.id)}>
-                          {t("Save")}
-                        </Button>
-                        {u.role && u.id !== me.id && (
+    <HqOnly>
+      <div>
+        <PageHeader title={t("Users")} />
+        <p className="mb-4 text-sm text-muted-foreground">
+          Staff sign up themselves, then you assign their role and branch here. Showroom roles need
+          a branch.
+        </p>
+        <Input
+          className="mb-3 max-w-sm bg-card"
+          aria-label="Search users"
+          placeholder="Search name, email, role or branch"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        {error && (
+          <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            Could not load the users: {error.message}
+          </p>
+        )}
+        <Card>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("Name")}</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>{t("Role")}</TableHead>
+                <TableHead>{t("Branch")}</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {shown.map((u) => {
+                const pending = pendingEdit(u);
+                const e = pending ?? { role: u.role, branch: u.branch_id ?? "none" };
+                // A super admin can only be touched by another super admin.
+                const locked = u.roles.includes("super_admin") && !isSuper;
+                const set = (patch: Partial<{ role: string; branch: string }>) =>
+                  setEdits((current) => {
+                    const base = baseOf(u);
+                    const prev = current[u.id];
+                    const prevBase =
+                      prev && prev.base === base
+                        ? prev
+                        : { role: u.role, branch: u.branch_id ?? "none" };
+                    return { ...current, [u.id]: { ...prevBase, ...patch, base } };
+                  });
+                return (
+                  <TableRow key={u.id}>
+                    <TableCell className="font-medium">{u.full_name}</TableCell>
+                    <TableCell>{u.email}</TableCell>
+                    <TableCell>
+                      <Select
+                        value={e.role}
+                        onValueChange={(v) => set({ role: v })}
+                        disabled={!me?.canWriteHq || locked}
+                      >
+                        <SelectTrigger className="w-48">
+                          <SelectValue placeholder="No role" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {roles.map((r) => (
+                            <SelectItem key={r} value={r}>
+                              {roleLabel[r]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {u.roles.length > 1 && (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Also:{" "}
+                          {u.roles
+                            .slice(1)
+                            .map((r) => roleLabel[r] ?? r)
+                            .join(", ")}
+                        </div>
+                      )}
+                      {u.roles.length === 0 && (
+                        <div className="mt-1 text-xs text-muted-foreground">Access revoked</div>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={e.branch}
+                        onValueChange={(v) => set({ branch: v })}
+                        disabled={!me?.canWriteHq || locked}
+                      >
+                        <SelectTrigger className="w-56">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">— None (HQ) —</SelectItem>
+                          {branches.map((b) => (
+                            <SelectItem key={b.id} value={b.id}>
+                              {b.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      {me?.canWriteHq && (
+                        <div className="flex gap-2">
                           <Button
                             size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                            onClick={() => revoke(u.id, u.full_name)}
+                            disabled={!pending || locked}
+                            onClick={() => save(u.id)}
                           >
-                            Revoke
+                            {t("Save")}
                           </Button>
-                        )}
-                      </div>
-                    )}
+                          {u.role && u.id !== me.id && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-destructive"
+                              disabled={locked}
+                              onClick={() => revoke(u.id, u.full_name)}
+                            >
+                              Revoke
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {shown.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                    {data.length ? "No users match this search." : "No users yet."}
                   </TableCell>
                 </TableRow>
-              );
-            })}
-            {shown.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                  {data.length ? "No users match this search." : "No users yet."}
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </Card>
-    </div>
+              )}
+            </TableBody>
+          </Table>
+        </Card>
+      </div>
+    </HqOnly>
   );
 }

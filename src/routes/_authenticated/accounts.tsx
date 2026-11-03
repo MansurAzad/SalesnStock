@@ -365,6 +365,7 @@ function Accounts() {
                 <TableCell className="text-right">
                   {canReverse(x) &&
                     x.ref_id === null &&
+                    x.kind === "income" &&
                     !reversedIds.has(x.id) &&
                     x.category !== "Reversal" && (
                       <Button size="sm" variant="outline" onClick={() => reverse(x.id)}>

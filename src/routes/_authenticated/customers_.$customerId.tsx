@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
 import { localToday } from "@/lib/date";
+import { enqueue, isNetworkError } from "@/lib/offline";
 
 export const Route = createFileRoute("/_authenticated/customers_/$customerId")({
   head: () => ({ meta: [{ title: "Customer — Dealer ERP" }] }),
@@ -36,6 +37,7 @@ function CustomerDetail() {
   const [notes, setNotes] = useState<string | null>(null);
   const [savingNotes, setSavingNotes] = useState(false);
   const [collectAmounts, setCollectAmounts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
 
   const { data, error } = useQuery({
     queryKey: ["customer", customerId],
@@ -106,17 +108,36 @@ function CustomerDetail() {
       toast.error("Enter an amount greater than zero");
       return;
     }
-    const { error: e } = await supabase.rpc("pay_installment", {
-      _inst: installmentId,
-      _amount: amount,
-    });
-    if (e) {
-      toast.error(e.message);
-      return;
+    if (busy) return;
+    setBusy(true);
+    const offline = async () => {
+      await enqueue("kisti", { inst: installmentId, amount }, `Kisti ${taka(amount)}`, me?.id);
+      toast.success("Offline — collection saved and will sync when internet returns");
+    };
+    try {
+      if (!navigator.onLine) {
+        await offline();
+        return;
+      }
+      const { error: e } = await supabase.rpc("pay_installment", {
+        _inst: installmentId,
+        _amount: amount,
+      });
+      if (e && isNetworkError(e)) {
+        await offline();
+        return;
+      }
+      if (e) {
+        toast.error(e.message);
+        return;
+      }
+      toast.success(`${taka(amount)} collected`);
+      setCollectAmounts((prev) => ({ ...prev, [installmentId]: "" }));
+      qc.invalidateQueries({ queryKey: ["customer", customerId] });
+      qc.invalidateQueries({ queryKey: ["installments"] });
+    } finally {
+      setBusy(false);
     }
-    toast.success(`${taka(amount)} collected`);
-    qc.invalidateQueries({ queryKey: ["customer", customerId] });
-    qc.invalidateQueries({ queryKey: ["installments"] });
   }
 
   async function saveNotes() {
@@ -339,7 +360,7 @@ function CustomerDetail() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
-                        {due > 0 && canEdit && (
+                        {due > 0 && !i.cancelled && canEdit && (
                           <>
                             <Input
                               type="number"
@@ -356,11 +377,19 @@ function CustomerDetail() {
                             />
                             <Button
                               size="sm"
+                              disabled={busy}
                               onClick={() => {
-                                const typed = Number(collectAmounts[i.id]);
-                                const amt =
-                                  Number.isFinite(typed) && typed > 0 ? Math.min(typed, due) : due;
-                                void collect(i.id, amt);
+                                const raw = collectAmounts[i.id];
+                                // An empty box means "collect the full due"; a typed
+                                // value has to be a real amount, so 0 can never become
+                                // a full collection.
+                                const typed =
+                                  raw === undefined || raw.trim() === "" ? due : Number(raw);
+                                if (!Number.isFinite(typed) || typed <= 0) {
+                                  toast.error("Enter an amount greater than zero");
+                                  return;
+                                }
+                                void collect(i.id, Math.min(typed, due));
                               }}
                             >
                               {t("Pay")}

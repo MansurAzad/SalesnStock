@@ -64,7 +64,7 @@ function Labels() {
   const [size, setSize] = useState("medium");
   const [showPrice, setShowPrice] = useState(true);
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const { data: items = [] } = useQuery({
+  const { data: items = [], error } = useQuery({
     queryKey: ["inventory", branch, "in_stock", "labels"],
     enabled: !!branch,
     queryFn: async () => {
@@ -93,6 +93,11 @@ function Labels() {
 
   return (
     <div>
+      {error && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the stock for labels: {error.message}
+        </p>
+      )}
       <div className="print:hidden">
         <PageHeader title={t("Labels")}>
           <BranchPicker

@@ -37,6 +37,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { matchesImei } from "@/lib/imei";
 
 export const Route = createFileRoute("/_authenticated/transfers")({
   head: () => ({ meta: [{ title: "Stock transfers — Dealer ERP" }] }),
@@ -92,8 +93,13 @@ function Transfers() {
     qc.invalidateQueries({ queryKey: ["inventory"] });
   }
 
+  // The database lets an HQ admin, or a branch manager / sales / accountant of
+  // that branch, receive the stock.
   const canReceive = (to: string) =>
-    me?.canWriteHq || (me?.branch_id === to && !me.roles.includes("auditor"));
+    !!me &&
+    (me.canWriteHq ||
+      (me.branch_id === to &&
+        me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
   const canCancel = (from: string) =>
     !!me && (me.canWriteHq || (me.branch_id === from && me.roles.includes("branch_manager")));
   const shown = list.filter(
@@ -224,6 +230,7 @@ function NewTransfer() {
   const [note, setNote] = useState("");
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
   const fromOptions = me?.canWriteHq ? branches : branches.filter((b) => b.id === me?.branch_id);
 
   const { data: items = [] } = useQuery({
@@ -249,7 +256,7 @@ function NewTransfer() {
 
   const findByCode = (code: string) => {
     const c = code.trim();
-    return items.find((i) => i.imei === c || i.imei2 === c);
+    return items.find((i) => matchesImei(i.imei, c) || matchesImei(i.imei2, c));
   };
   function pick(code: string) {
     const hit = findByCode(code);
@@ -269,28 +276,35 @@ function NewTransfer() {
   }
 
   async function submit() {
-    const { error } = await supabase.rpc("create_transfer", {
-      _from: from,
-      _to: to,
-      _item_ids: [...sel],
-      _note: note.trim(),
-    });
-    if (error) {
-      toast.error(error.message);
-      return;
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc("create_transfer", {
+        _from: from,
+        _to: to,
+        _item_ids: [...sel],
+        _note: note.trim(),
+      });
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success(`${sel.size} items sent`);
+      setSel(new Set());
+      setQ("");
+      setNote("");
+      setFrom("");
+      setTo("");
+      setOpen(false);
+      qc.invalidateQueries({ queryKey: ["transfers"] });
+      qc.invalidateQueries({ queryKey: ["inventory"] });
+    } finally {
+      setBusy(false);
     }
-    toast.success(`${sel.size} items sent`);
-    setSel(new Set());
-    setQ("");
-    setNote("");
-    setFrom("");
-    setTo("");
-    setOpen(false);
-    qc.invalidateQueries({ queryKey: ["transfers"] });
-    qc.invalidateQueries({ queryKey: ["inventory"] });
   }
 
-  if (!me || me.roles.every((r) => r === "auditor" || r === "accountant")) return null;
+  // An auditor only reads; everyone else the database lets move stock may send it.
+  if (!me || me.roles.every((r) => r === "auditor")) return null;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -387,7 +401,7 @@ function NewTransfer() {
             <div className="p-4 text-center text-sm text-muted-foreground">No stock</div>
           )}
         </div>
-        <Button disabled={!from || !to || sel.size === 0} onClick={submit}>
+        <Button disabled={busy || !from || !to || sel.size === 0} onClick={submit}>
           Send {sel.size} items
         </Button>
       </DialogContent>

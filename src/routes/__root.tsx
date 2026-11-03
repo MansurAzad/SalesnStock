@@ -16,7 +16,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { LangProvider } from "@/lib/i18n";
 import { supabase } from "@/integrations/supabase/client";
 import { registerOfflineShell } from "@/lib/sw-register";
-import { clearOutbox } from "@/lib/offline";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -168,7 +167,9 @@ function RootComponent() {
         // Never restore the previous user's cached data on this device.
         queryClient.clear();
         void idbDel("erp-query-cache");
-        void clearOutbox();
+        // The offline queue is kept: it holds sales that have not reached the
+        // server yet, and every entry carries the user who made it, so the next
+        // cashier on this device neither sees nor syncs them.
         return;
       }
       queryClient.invalidateQueries();

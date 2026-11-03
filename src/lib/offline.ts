@@ -7,6 +7,10 @@ import { supabase } from "@/integrations/supabase/client";
  * stored on this device and sent to the server (apply_offline_op) when online.
  * The server applies each op once (client_ref) and records clashes as "conflict"
  * — first sync wins.
+ *
+ * Every entry carries the id of the user who made it, so a shared showroom device
+ * never books one cashier's sale under another cashier's name, and signing out
+ * cannot throw away a sale that has not synced yet.
  */
 export type OpKind = "sale" | "kisti" | "expense";
 export type OutboxOp = {
@@ -16,12 +20,15 @@ export type OutboxOp = {
   queued_at: string;
   label: string;
   state: "pending" | "conflict";
+  /** The user who made the entry; entries without one predate this field. */
+  user_id?: string | undefined;
   error?: string | undefined;
 };
 
 const KEY = "erp-outbox";
 let ops: OutboxOp[] = [];
 let loaded = false;
+let loadPromise: Promise<void> | null = null;
 let syncing = false;
 // The snapshot must change identity whenever anything the UI shows changes —
 // including the syncing flag, which used to live in a plain variable and so
@@ -47,11 +54,24 @@ function uuid(): string {
   return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 14)}`;
 }
 
-async function load() {
-  if (loaded || typeof indexedDB === "undefined") return;
-  ops = ((await get(KEY)) as OutboxOp[] | undefined) ?? [];
-  loaded = true;
-  emit();
+/**
+ * The queue is read once per page load. The promise is memoised because two
+ * concurrent reads used to race: the slower one could overwrite a sale that was
+ * queued in between, and the sale was lost.
+ */
+function load(): Promise<void> {
+  if (loaded) return Promise.resolve();
+  if (loadPromise) return loadPromise;
+  loadPromise = (async () => {
+    if (typeof indexedDB === "undefined") {
+      loaded = true;
+      return;
+    }
+    ops = ((await get(KEY)) as OutboxOp[] | undefined) ?? [];
+    loaded = true;
+    emit();
+  })();
+  return loadPromise;
 }
 async function save() {
   await set(KEY, ops);
@@ -70,16 +90,31 @@ export function isNetworkError(e: unknown) {
 }
 
 export function deviceName() {
-  if (typeof localStorage === "undefined") return "device";
-  let d = localStorage.getItem("erp-device");
-  if (!d) {
-    d = `${/Windows/.test(navigator.userAgent) ? "PC" : "Device"}-${uuid().slice(0, 6)}`;
-    localStorage.setItem("erp-device", d);
+  try {
+    if (typeof localStorage === "undefined") return "device";
+    let d = localStorage.getItem("erp-device");
+    if (!d) {
+      d = `${/Windows/.test(navigator.userAgent) ? "PC" : "Device"}-${uuid().slice(0, 6)}`;
+      localStorage.setItem("erp-device", d);
+    }
+    return d;
+  } catch {
+    // A locked-down browser (private mode, embedded webview) refuses storage;
+    // the name is only a label, so a fallback is enough.
+    return "device";
   }
-  return d;
 }
 
-export async function enqueue(kind: OpKind, payload: Record<string, unknown>, label: string) {
+/** The entries of one user; entries queued before the owner was recorded count as theirs. */
+const ownedBy = (op: OutboxOp, userId: string | undefined) =>
+  !op.user_id || !userId || op.user_id === userId;
+
+export async function enqueue(
+  kind: OpKind,
+  payload: Record<string, unknown>,
+  label: string,
+  userId?: string,
+) {
   await load();
   ops = [
     ...ops,
@@ -90,6 +125,7 @@ export async function enqueue(kind: OpKind, payload: Record<string, unknown>, la
       label,
       queued_at: new Date().toISOString(),
       state: "pending",
+      user_id: userId,
     },
   ];
   await save();
@@ -101,11 +137,10 @@ export async function dismiss(ref: string) {
   await save();
 }
 
-/** Drop every queued entry — used on sign-out so the next user on this device
- *  does not inherit the previous user's unsynced sales, kisti or expenses. */
-export async function clearOutbox() {
+/** Drop the entries of one user — used when a device is handed over. */
+export async function clearOutbox(userId?: string) {
   await load();
-  ops = [];
+  ops = userId ? ops.filter((o) => o.user_id !== userId) : [];
   await save();
 }
 
@@ -119,7 +154,8 @@ export async function syncNow(): Promise<{ applied: number; conflicts: number }>
   try {
     const { data: s } = await supabase.auth.getSession();
     if (!s.session) return { applied, conflicts };
-    for (const op of ops.filter((o) => o.state === "pending")) {
+    const uid = s.session.user.id;
+    for (const op of ops.filter((o) => o.state === "pending" && ownedBy(o, uid))) {
       const { data, error } = await supabase.rpc("apply_offline_op", {
         _client_ref: op.client_ref,
         _kind: op.kind,
@@ -162,7 +198,8 @@ export async function syncNow(): Promise<{ applied: number; conflicts: number }>
 }
 
 const snap = () => snapshot;
-export function useOutbox() {
+const serverSnapshot = { ops: [] as OutboxOp[], syncing: false };
+export function useOutbox(userId?: string) {
   useEffect(() => {
     void load();
   }, []);
@@ -172,9 +209,9 @@ export function useOutbox() {
       return () => subs.delete(f);
     },
     snap,
-    () => ({ ops: [] as OutboxOp[], syncing: false }),
+    () => serverSnapshot,
   );
-  const list = state.ops;
+  const list = state.ops.filter((o) => ownedBy(o, userId));
   return {
     ops: list,
     pending: list.filter((o) => o.state === "pending").length,

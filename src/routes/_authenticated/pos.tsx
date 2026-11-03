@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { enqueue, isNetworkError, offlineSoldIds, useOutbox } from "@/lib/offline";
 import { supabase } from "@/integrations/supabase/client";
 import { BranchPicker, PageHeader } from "@/components/BranchPicker";
-import { productLabel, taka, useMe } from "@/lib/erp";
+import { productLabel, taka, useBranches, useMe } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { X } from "lucide-react";
 import { ScanButton } from "@/components/BarcodeScanner";
-import { extractImei } from "@/lib/imei";
+import { matchesImei } from "@/lib/imei";
 import { fetchAllPages } from "@/lib/paginated-query";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 
@@ -35,6 +35,7 @@ type CartLine = {
   label: string;
   price: number;
   list_price: number;
+  cost: number;
 };
 
 function POS() {
@@ -62,7 +63,7 @@ function POS() {
       (me.branch_id === branch &&
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
 
-  const box = useOutbox();
+  const box = useOutbox(me?.id);
   const { data: allStock = [] } = useQuery({
     queryKey: ["inventory", branch, "in_stock", "pos"],
     enabled: !!branch,
@@ -70,12 +71,14 @@ function POS() {
       return fetchAllPages(
         supabase
           .from("inventory_items")
-          .select("id,imei,imei2,products(brand,model,variant,sale_price)")
+          .select("id,imei,imei2,purchase_price,products(brand,model,variant,sale_price)")
           .eq("branch_id", branch)
           .eq("status", "in_stock"),
       );
     },
   });
+  const { data: branches = [] } = useBranches();
+  const maxDiscountPct = Number(branches.find((b) => b.id === branch)?.max_discount_pct ?? 0);
 
   const soldOffline = offlineSoldIds(box.ops);
   const stock = allStock.filter((i) => !soldOffline.has(i.id));
@@ -104,19 +107,27 @@ function POS() {
   };
   const subtotal = cart.reduce((a, c) => a + c.price, 0);
   const listSubtotal = cart.reduce((a, c) => a + c.list_price, 0);
+  const cartCost = cart.reduce((a, c) => a + c.cost, 0);
   const discountAmount = Math.min(Math.max(num(discount), 0), subtotal);
   const total = Math.max(0, subtotal - discountAmount);
   // The server measures the discount against the catalogue price, so an edited line price
   // counts as a discount too and needs a reason.
   const effectiveDiscount = Math.max(listSubtotal - total, 0);
-  const needsReason = discountAmount > 0 || effectiveDiscount > 0;
+  // The server asks for a reason for any discount, and also when the total falls
+  // below what the shop paid for the handsets.
+  const belowCost = cart.length > 0 && total < cartCost;
+  const needsReason = discountAmount > 0 || effectiveDiscount > 0 || belowCost;
+  // …and above the branch limit the sale has to be approved by a manager.
+  const discountLimit = Math.round(listSubtotal * maxDiscountPct) / 100;
+  const needsApproval = effectiveDiscount > discountLimit || belowCost;
+  const canApprove =
+    !!me && (me.canWriteHq || (me.branch_id === branch && me.roles.includes("branch_manager")));
   const downPayment = Math.min(Math.max(num(down), 0), total);
   const financed = total - downPayment;
   const monthly = saleType === "installment" && Number(months) > 0 ? financed / Number(months) : 0;
 
   function add(imei: string) {
-    const code = extractImei(imei) ?? imei.trim();
-    const it = stock.find((s) => s.imei === code || s.imei2 === code);
+    const it = stock.find((s) => matchesImei(s.imei, imei) || matchesImei(s.imei2, imei));
     if (!it) {
       toast.error("IMEI not available in this branch");
       return;
@@ -136,6 +147,7 @@ function POS() {
               label: productLabel(it.products),
               price: Number(it.products?.sale_price ?? 0),
               list_price: Number(it.products?.sale_price ?? 0),
+              cost: Number(it.purchase_price ?? 0),
             },
           ],
     );
@@ -161,6 +173,7 @@ function POS() {
         discount_reason: reason.trim(),
       },
       `Sale ${taka(total)} · ${cart.length} pcs${phone ? " · " + phone : ""}`,
+      me?.id,
     );
     toast.success("Offline — sale saved on this device and will sync when internet returns");
     setCart([]);
@@ -377,6 +390,12 @@ function POS() {
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="e.g. Eid campaign, loyal customer"
                 />
+                {belowCost && (
+                  <p className="mt-1 text-xs text-destructive">
+                    This price is below what the shop paid ({taka(cartCost)}) — a reason is
+                    required.
+                  </p>
+                )}
               </div>
             )}
             <div>
@@ -445,6 +464,7 @@ function POS() {
               cart.length === 0 ||
               !canSell ||
               (needsReason && !reason.trim()) ||
+              (needsApproval && !canApprove) ||
               (saleType === "installment" &&
                 (!/^01\d{9}$/.test(phone) ||
                   financed <= 0 ||
@@ -456,6 +476,17 @@ function POS() {
           >
             {t("Checkout")} · {taka(saleType === "cash" ? total : downPayment)}
           </Button>
+          {!canSell && (
+            <p className="text-xs text-muted-foreground">
+              Your account cannot sell at this branch — ask the admin for a sales role.
+            </p>
+          )}
+          {canSell && needsApproval && !canApprove && (
+            <p className="text-xs text-destructive">
+              This discount is above the {maxDiscountPct}% limit of this showroom — a branch manager
+              has to complete the sale.
+            </p>
+          )}
         </Card>
       </div>
     </div>

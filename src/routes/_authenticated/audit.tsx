@@ -26,6 +26,8 @@ import {
 import { fetchAllPages } from "@/lib/paginated-query";
 import { downloadCsv } from "@/lib/csv";
 import { localDate, localDayEndIso, localDayStartIso } from "@/lib/date";
+import { useMe } from "@/lib/erp";
+import { HqOnly } from "@/components/HqOnly";
 
 /** Rows rendered in the table; the CSV export always contains every filtered row. */
 const MAX_ROWS = 500;
@@ -45,12 +47,14 @@ const detailsText = (details: unknown) =>
   details === null || details === undefined ? "" : JSON.stringify(details);
 
 function Audit() {
+  const { data: me } = useMe();
   const [q, setQ] = useState("");
   const [action, setAction] = useState("all");
   const [from, setFrom] = useState(localDate(new Date(Date.now() - 7 * 86400000)));
   const [to, setTo] = useState(localDate());
-  const { data = [] } = useQuery({
+  const { data = [], error } = useQuery({
     queryKey: ["audit", from, to],
+    enabled: !!me?.isHq,
     queryFn: async () => {
       const [logs, people] = await Promise.all([
         fetchAllPages(
@@ -87,6 +91,14 @@ function Audit() {
     [data, action, q],
   );
 
+  // A new period has a different set of actions, so a stale filter would
+  // hide every row without saying why.
+  function changePeriod(nextFrom: string, nextTo: string) {
+    setFrom(nextFrom);
+    setTo(nextTo);
+    setAction("all");
+  }
+
   const visible = rows.slice(0, MAX_ROWS);
 
   function exportCsv() {
@@ -102,112 +114,119 @@ function Audit() {
   }
 
   return (
-    <div>
-      <PageHeader title="Audit log">
-        <div className="flex items-center gap-1">
-          <Label htmlFor="audit-from" className="text-xs">
-            From
-          </Label>
-          <Input
-            id="audit-from"
-            type="date"
-            className="w-40"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-1">
-          <Label htmlFor="audit-to" className="text-xs">
-            To
-          </Label>
-          <Input
-            id="audit-to"
-            type="date"
-            className="w-40"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-1">
-          <Label htmlFor="audit-action" className="text-xs">
-            Action
-          </Label>
-          <Select value={action} onValueChange={setAction}>
-            <SelectTrigger id="audit-action" className="w-44 bg-card">
-              <SelectValue placeholder="All actions" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All actions</SelectItem>
-              {actions.map((a) => (
-                <SelectItem key={a} value={a}>
-                  {a}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <Input
-          id="audit-search"
-          aria-label="Search the audit log"
-          className="w-64"
-          placeholder="Search action, user, details…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-      </PageHeader>
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
-          <span className="text-sm text-muted-foreground">
-            Showing {visible.length} of {rows.length} rows
-          </span>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!rows.length}
-            onClick={exportCsv}
-            aria-label="Export the filtered audit log as CSV"
-          >
-            <Download className="mr-1 h-4 w-4" /> CSV
-          </Button>
-        </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Time</TableHead>
-              <TableHead>User</TableHead>
-              <TableHead>Action</TableHead>
-              <TableHead>Details</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {visible.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell className="whitespace-nowrap text-xs">
-                  {new Date(r.created_at).toLocaleString()}
-                </TableCell>
-                <TableCell>{r.who}</TableCell>
-                <TableCell className="font-mono text-xs">{r.action}</TableCell>
-                <TableCell className="max-w-xl break-all font-mono text-[11px] text-muted-foreground">
-                  {detailsText(r.details)}
-                </TableCell>
-              </TableRow>
-            ))}
-            {visible.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
-                  No entries.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-        {rows.length > MAX_ROWS && (
-          <div className="p-2 text-center text-xs text-muted-foreground">
-            Showing the first {MAX_ROWS} rows — the CSV export contains all {rows.length} filtered
-            rows.
+    <HqOnly>
+      <div>
+        <PageHeader title="Audit log">
+          <div className="flex items-center gap-1">
+            <Label htmlFor="audit-from" className="text-xs">
+              From
+            </Label>
+            <Input
+              id="audit-from"
+              type="date"
+              className="w-40"
+              value={from}
+              onChange={(e) => changePeriod(e.target.value, to)}
+            />
           </div>
+          <div className="flex items-center gap-1">
+            <Label htmlFor="audit-to" className="text-xs">
+              To
+            </Label>
+            <Input
+              id="audit-to"
+              type="date"
+              className="w-40"
+              value={to}
+              onChange={(e) => changePeriod(from, e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <Label htmlFor="audit-action" className="text-xs">
+              Action
+            </Label>
+            <Select value={action} onValueChange={setAction}>
+              <SelectTrigger id="audit-action" className="w-44 bg-card">
+                <SelectValue placeholder="All actions" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All actions</SelectItem>
+                {actions.map((a) => (
+                  <SelectItem key={a} value={a}>
+                    {a}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Input
+            id="audit-search"
+            aria-label="Search the audit log"
+            className="w-64"
+            placeholder="Search action, user, details…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </PageHeader>
+        {error && (
+          <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            Could not load the audit log: {error.message}
+          </p>
         )}
-      </Card>
-    </div>
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3">
+            <span className="text-sm text-muted-foreground">
+              Showing {visible.length} of {rows.length} rows
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!rows.length}
+              onClick={exportCsv}
+              aria-label="Export the filtered audit log as CSV"
+            >
+              <Download className="mr-1 h-4 w-4" /> CSV
+            </Button>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead>
+                <TableHead>User</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Details</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {new Date(r.created_at).toLocaleString()}
+                  </TableCell>
+                  <TableCell>{r.who}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.action}</TableCell>
+                  <TableCell className="max-w-xl break-all font-mono text-[11px] text-muted-foreground">
+                    {detailsText(r.details)}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {visible.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                    No entries.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          {rows.length > MAX_ROWS && (
+            <div className="p-2 text-center text-xs text-muted-foreground">
+              Showing the first {MAX_ROWS} rows — the CSV export contains all {rows.length} filtered
+              rows.
+            </div>
+          )}
+        </Card>
+      </div>
+    </HqOnly>
   );
 }

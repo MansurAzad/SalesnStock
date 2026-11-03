@@ -31,3 +31,18 @@ export function extractImei(raw: string): string | null {
   const fallback = m[0]?.slice(0, 15);
   return fallback && /^\d{15}$/.test(fallback) ? fallback : null;
 }
+
+/**
+ * Does a scanned code belong to a stored IMEI? Both may be 15 or 16 digits, and
+ * a scanner sometimes adds a check digit, so the first 15 digits are compared
+ * as well.
+ */
+export function matchesImei(stored: string | null | undefined, scanned: string): boolean {
+  if (!stored) return false;
+  const a = stored.replace(/\s/g, "");
+  const b = scanned.replace(/\s/g, "");
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const c = extractImei(b);
+  return !!c && (a === c || a.slice(0, 15) === c);
+}

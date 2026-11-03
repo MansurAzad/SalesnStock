@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/BranchPicker";
 import { useMe, useSettings } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
+import { HqOnly } from "@/components/HqOnly";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,12 +38,17 @@ function SettingsPage() {
   const { data } = useSettings();
   const qc = useQueryClient();
   const [f, setF] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
   useEffect(() => {
-    if (data)
+    // The form is filled once. A later refetch (another admin saved, the tab
+    // regained focus) must not throw away what this admin has typed.
+    if (data && !loaded) {
       setF(
         Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? "" : String(v)])),
       );
-  }, [data]);
+      setLoaded(true);
+    }
+  }, [data, loaded]);
 
   async function save() {
     const logo = f["logo_url"]?.trim() ?? "";
@@ -72,36 +78,38 @@ function SettingsPage() {
 
   const canEdit = !!me?.canWriteHq;
   return (
-    <div className="max-w-2xl">
-      <PageHeader title={t("Settings")} />
-      <Card className="space-y-4 p-6">
-        {fields.map(([k, l]) => (
-          <div key={k} className="space-y-1">
-            <Label>{l}</Label>
-            <Input
+    <HqOnly>
+      <div className="max-w-2xl">
+        <PageHeader title={t("Settings")} />
+        <Card className="space-y-4 p-6">
+          {fields.map(([k, l]) => (
+            <div key={k} className="space-y-1">
+              <Label>{l}</Label>
+              <Input
+                disabled={!canEdit}
+                value={f[k] ?? ""}
+                onChange={(e) => setF({ ...f, [k]: e.target.value })}
+              />
+            </div>
+          ))}
+          {
+            <img
+              src={logoSrc(f["logo_url"])}
+              alt="Logo preview"
+              className="h-16 w-auto rounded border object-contain p-1"
+            />
+          }
+          <div className="space-y-1">
+            <Label>Invoice / label footer</Label>
+            <Textarea
               disabled={!canEdit}
-              value={f[k] ?? ""}
-              onChange={(e) => setF({ ...f, [k]: e.target.value })}
+              value={f["invoice_footer"] ?? ""}
+              onChange={(e) => setF({ ...f, invoice_footer: e.target.value })}
             />
           </div>
-        ))}
-        {
-          <img
-            src={logoSrc(f["logo_url"])}
-            alt="Logo preview"
-            className="h-16 w-auto rounded border object-contain p-1"
-          />
-        }
-        <div className="space-y-1">
-          <Label>Invoice / label footer</Label>
-          <Textarea
-            disabled={!canEdit}
-            value={f["invoice_footer"] ?? ""}
-            onChange={(e) => setF({ ...f, invoice_footer: e.target.value })}
-          />
-        </div>
-        {canEdit && <Button onClick={save}>{t("Save")}</Button>}
-      </Card>
-    </div>
+          {canEdit && <Button onClick={save}>{t("Save")}</Button>}
+        </Card>
+      </div>
+    </HqOnly>
   );
 }

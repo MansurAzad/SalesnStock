@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { localDate } from "@/lib/date";
 
 export const Route = createFileRoute("/_authenticated/reports")({
   head: () => ({
@@ -34,7 +35,6 @@ export const Route = createFileRoute("/_authenticated/reports")({
 });
 
 type Row = Record<string, string | number>;
-const iso = (d: Date) => d.toISOString().slice(0, 10);
 const fromTs = (d: string) => new Date(d + "T00:00:00").toISOString();
 const toTs = (d: string) => new Date(d + "T23:59:59.999").toISOString();
 const dt = (s: string | null) => (s ? new Date(s).toLocaleString() : "");
@@ -43,8 +43,8 @@ function Reports() {
   const { t } = useT();
   const [branch, setBranch] = useState("");
   const today = new Date();
-  const [from, setFrom] = useState(iso(new Date(today.getFullYear(), today.getMonth(), 1)));
-  const [to, setTo] = useState(iso(today));
+  const [from, setFrom] = useState(localDate(new Date(today.getFullYear(), today.getMonth(), 1)));
+  const [to, setTo] = useState(localDate(today));
   const [tab, setTab] = useState("sales");
   const { data: branches = [] } = useBranches();
   const { data: settings } = useSettings();
@@ -79,7 +79,7 @@ function Reports() {
           disabled={!branch}
           onClick={() => window.print()}
         >
-          <Printer className="mr-1 h-4 w-4" /> PDF
+          <Printer className="mr-1 h-4 w-4" /> Print / PDF
         </Button>
       </PageHeader>
       <div className="mb-4 hidden print:block">
@@ -450,7 +450,7 @@ function KistiReport({ branch, from, to, bname }: P) {
         .from("installments")
         .select("*, installment_plans(months, sales(invoice_no), customers(name,phone))")
         .eq("cancelled", false)
-        .lt("due_date", iso(new Date()))
+        .lt("due_date", localDate())
         .order("due_date");
       if (branch !== "all") q = q.eq("branch_id", branch);
       return fetchAllPages(q);
@@ -467,7 +467,7 @@ function KistiReport({ branch, from, to, bname }: P) {
       return data ?? [];
     },
   });
-  const todayStr = iso(new Date());
+  const todayStr = localDate();
   const rows: Row[] = data.map((i) => {
     const due = Number(i.amount) - Number(i.paid_amount);
     const status =

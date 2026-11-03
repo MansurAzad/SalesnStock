@@ -71,6 +71,7 @@ function ReceiptPage() {
   const { saleId } = Route.useParams();
   const [fmt, setFmt] = useState<Fmt>("invoice");
   const [lang, setLang] = useState<"en" | "bn">("en");
+  const { data: s } = useSettings();
   useEffect(() => {
     void (async () => {
       const { data: u } = await supabase.auth.getUser();
@@ -81,15 +82,15 @@ function ReceiptPage() {
         .eq("id", u.user.id)
         .maybeSingle();
       if (p?.print_lang === "en" || p?.print_lang === "bn") setLang(p.print_lang);
+      else if (s?.default_print_lang === "bn") setLang("bn");
     })();
-  }, []);
+  }, [s?.default_print_lang]);
   const chooseLang = async (l: "en" | "bn") => {
     setLang(l);
     const { data: u } = await supabase.auth.getUser();
     if (u.user) await supabase.from("profiles").update({ print_lang: l }).eq("id", u.user.id);
   };
   const T = (x: string) => (lang === "bn" ? (BN[x] ?? x) : x);
-  const { data: s } = useSettings();
   const { data: branches = [] } = useBranches();
   const { data, isLoading } = useQuery({
     queryKey: ["sale-print", saleId],

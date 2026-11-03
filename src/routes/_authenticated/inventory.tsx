@@ -106,7 +106,9 @@ function Inventory() {
     <div>
       <PageHeader title={t("Inventory")}>
         <BranchPicker value={branch} onChange={setBranch} allowAll />
-        {me?.canWriteHq && <AddStock />}
+        {me && (me.canWriteHq || (!!me.branch_id && me.roles.includes("branch_manager"))) && (
+          <AddStock fixedBranchId={me.canWriteHq ? undefined : (me.branch_id ?? undefined)} />
+        )}
       </PageHeader>
       <Tabs defaultValue="items">
         <TabsList>
@@ -237,13 +239,13 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
       toast.error("Brand and model are required");
       return;
     }
-    const purchase_price = Number(f.purchase_price);
-    const sale_price = Number(f.sale_price);
+    const purchase_price = f.purchase_price.trim() === "" ? NaN : Number(f.purchase_price);
+    const sale_price = f.sale_price.trim() === "" ? NaN : Number(f.sale_price);
     if (!Number.isFinite(purchase_price) || purchase_price < 0) {
       toast.error("Enter a valid purchase price");
       return;
     }
-    if (!Number.isFinite(sale_price) || sale_price < 0) {
+    if (!Number.isFinite(sale_price) || sale_price <= 0) {
       toast.error("Enter a valid sale price");
       return;
     }
@@ -275,8 +277,9 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
   async function saveProduct() {
     if (!editing) return;
     const { id, ...fields } = editing;
-    const purchase_price = Number(fields.purchase_price);
-    const sale_price = Number(fields.sale_price);
+    const purchase_price =
+      fields.purchase_price.trim() === "" ? NaN : Number(fields.purchase_price);
+    const sale_price = fields.sale_price.trim() === "" ? NaN : Number(fields.sale_price);
     const min_stock = Number(fields.min_stock) || 0;
     if (!fields.brand.trim() || !fields.model.trim()) {
       toast.error("Brand and model are required");
@@ -286,7 +289,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
       toast.error("Enter a valid purchase price");
       return;
     }
-    if (!Number.isFinite(sale_price) || sale_price < 0) {
+    if (!Number.isFinite(sale_price) || sale_price <= 0) {
       toast.error("Enter a valid sale price");
       return;
     }
@@ -507,7 +510,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
-function AddStock() {
+function AddStock({ fixedBranchId }: { fixedBranchId?: string }) {
   const { t } = useT();
   const qc = useQueryClient();
   const { data: products = [] } = useProducts();
@@ -522,7 +525,7 @@ function AddStock() {
   });
   const [open, setOpen] = useState(false);
   const [productId, setProductId] = useState("");
-  const [branchId, setBranchId] = useState("");
+  const [branchId, setBranchId] = useState(fixedBranchId ?? "");
   const [imeis, setImeis] = useState("");
   const [supplierId, setSupplierId] = useState("");
   const [invoice, setInvoice] = useState("");
@@ -531,12 +534,17 @@ function AddStock() {
   const [method, setMethod] = useState("cash");
   const [note, setNote] = useState("");
   const product = products.find((p) => p.id === productId);
+  // A branch manager can only book stock into their own showroom.
+  useEffect(() => {
+    if (fixedBranchId) setBranchId(fixedBranchId);
+  }, [fixedBranchId]);
   // Each line is "imei" or "imei,imeei2" — a phone with two IMEI codes is the
   // normal case in this trade, so the second one must not be thrown away.
+  // Lines may also be pasted as a tab separated column straight from Excel.
   const list = Array.from(
     new Map(
       imeis
-        .split(/\n+/)
+        .split(/[\n\r\t]+/)
         .map((line) => line.trim())
         .filter(Boolean)
         .map((line) => {
@@ -583,6 +591,9 @@ function AddStock() {
     }
     toast.success(`${list.length} items added`);
     setImeis("");
+    setProductId("");
+    setSupplierId("");
+    setCost("");
     setInvoice("");
     setPaid("");
     setNote("");
@@ -616,7 +627,7 @@ function AddStock() {
             </SelectContent>
           </Select>
           <div className="grid grid-cols-2 gap-2">
-            <Select value={branchId} onValueChange={setBranchId}>
+            <Select value={branchId} onValueChange={setBranchId} disabled={!!fixedBranchId}>
               <SelectTrigger>
                 <SelectValue placeholder={t("Branch")} />
               </SelectTrigger>
@@ -738,6 +749,12 @@ function AddStock() {
               {list.length} IMEI
               {invalid.length > 0 && (
                 <span className="text-destructive"> · {invalid.length} invalid</span>
+              )}
+              {invalid.length > 0 && (
+                <span className="block">
+                  One IMEI per line — a second IMEI goes after a comma, and a pasted column from
+                  Excel works too.
+                </span>
               )}
             </div>
           </div>

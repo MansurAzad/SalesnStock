@@ -98,7 +98,7 @@ function Employees() {
   const { data: me } = useMe();
   const [branch, setBranch] = useState("");
   const { data: branches = [] } = useBranches();
-  const { data: emps = [] } = useQuery({
+  const { data: emps = [], error } = useQuery({
     queryKey: ["employees", branch],
     enabled: !!branch,
     queryFn: async () => {
@@ -113,6 +113,11 @@ function Employees() {
       <PageHeader title={t("Employees")}>
         <BranchPicker value={branch} onChange={setBranch} allowAll />
       </PageHeader>
+      {error && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the staff list: {error.message}
+        </p>
+      )}
       <Tabs defaultValue="attendance">
         <TabsList>
           <TabsTrigger value="attendance">Attendance</TabsTrigger>
@@ -160,7 +165,7 @@ function Daily({ emps, branch }: { emps: Emp[]; branch: string }) {
     (me.canWriteHq ||
       (me.branch_id === branchId &&
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
-  const { data: rows = [] } = useQuery({
+  const { data: rows = [], error } = useQuery({
     queryKey: ["attendance", branch, day],
     enabled: !!branch,
     queryFn: async () => {
@@ -234,6 +239,11 @@ function Daily({ emps, branch }: { emps: Emp[]; branch: string }) {
           present
         </span>
       </div>
+      {error && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the attendance for this day: {error.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>
@@ -547,7 +557,9 @@ function Monthly({
   const { data: me } = useMe();
   const [month, setMonth] = useState(today().slice(0, 7));
   const [payrollOpen, setPayrollOpen] = useState(false);
-  const { data: rows = [] } = useQuery({
+  // The server only accepts a period like 2026-01.
+  const monthOk = /^\d{4}-\d{2}$/.test(month);
+  const { data: rows = [], error: rowsError } = useQuery({
     queryKey: ["attendance-month", branch, month],
     enabled: !!branch,
     queryFn: async () => {
@@ -562,7 +574,7 @@ function Monthly({
       return fetchAllPages(q);
     },
   });
-  const { data: payrollRows = [] } = useQuery({
+  const { data: payrollRows = [], error: payrollError } = useQuery({
     queryKey: ["employee-payroll", branch, month],
     enabled: !!branch && !!month,
     queryFn: async () => {
@@ -636,7 +648,7 @@ function Monthly({
           CSV
         </Button>
         {payrollAllowed && (
-          <Button disabled={!canRunPayroll} onClick={() => setPayrollOpen(true)}>
+          <Button disabled={!canRunPayroll || !monthOk} onClick={() => setPayrollOpen(true)}>
             Run payroll
           </Button>
         )}
@@ -645,7 +657,13 @@ function Monthly({
             Pick a single branch to run payroll.
           </span>
         )}
+        {!monthOk && <span className="text-xs text-destructive">Pick a month first.</span>}
       </div>
+      {(rowsError || payrollError) && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the attendance summary: {(rowsError ?? payrollError)?.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>

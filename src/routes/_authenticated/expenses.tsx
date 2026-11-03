@@ -86,6 +86,7 @@ function Expenses() {
     attachment: "",
   });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const limit = branches.find((b) => b.id === branch)?.expense_limit;
   const amount = Number(f.amount);
   const amountOk = Number.isFinite(amount) && amount > 0;
@@ -131,6 +132,16 @@ function Expenses() {
   }
 
   async function submit() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await submitInner();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitInner() {
     if (!canSubmit) {
       toast.error("Choose a branch you are allowed to operate");
       return;
@@ -184,6 +195,7 @@ function Expenses() {
           attachment: f.attachment,
         },
         `Expense ${categoryValue} ৳${amount}`,
+        me?.id,
       );
       toast.success("Offline — expense saved and will sync when internet returns");
       resetForm();
@@ -209,7 +221,13 @@ function Expenses() {
       toast.error(error.message);
       return;
     }
-    toast.success(st === "approved" ? "Expense recorded" : "Above limit — sent for admin approval");
+    toast.success(
+      st === "approved"
+        ? "Expense recorded"
+        : overLimit
+          ? "Above the branch limit — sent for admin approval"
+          : "Sent for approval",
+    );
     resetForm();
     qc.invalidateQueries();
   }
@@ -383,7 +401,7 @@ function Expenses() {
             />
           </div>
           <div className="md:col-span-6 flex flex-wrap items-center gap-3">
-            <Button onClick={submit} disabled={!amountOk || !canSubmit || !categoryOk}>
+            <Button onClick={submit} disabled={busy || !amountOk || !canSubmit || !categoryOk}>
               {editingId ? "Save changes" : "Add expense"}
             </Button>
             {editingId && (

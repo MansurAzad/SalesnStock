@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import type { Database } from "@/integrations/supabase/types";
+import { dhakaDate } from "@/lib/date";
 
 const RUN = "X-Lovable-AIG-Run-ID";
 
@@ -32,7 +33,7 @@ export const Route = createFileRoute("/api/insights")({
         if (!question) return new Response("Please type a question", { status: 400 });
         const days = Math.min(Math.max(Number(body.days) || 30, 1), 365);
         const since = new Date(Date.now() - days * 86400000).toISOString();
-        const sinceDay = since.slice(0, 10);
+        const sinceDay = dhakaDate(new Date(Date.now() - days * 86400000));
 
         // All reads run as the signed-in user, so branch permissions apply.
         let salesQ = sb
@@ -40,6 +41,7 @@ export const Route = createFileRoute("/api/insights")({
           .select(
             "created_at,total,paid,discount,sale_type,payment_method,branch_id,sale_items(price,inventory_items(purchase_price,products(brand,model,variant)))",
           )
+          .neq("status", "returned")
           .gte("created_at", since)
           .limit(3000);
         let invQ = sb
@@ -47,7 +49,7 @@ export const Route = createFileRoute("/api/insights")({
           .select(
             "status,purchase_price,created_at,branch_id,products(brand,model,variant,sale_price)",
           )
-          .in("status", ["in_stock", "in_transit"])
+          .eq("status", "in_stock")
           .limit(5000);
         let expQ = sb
           .from("expenses")
@@ -158,15 +160,18 @@ export const Route = createFileRoute("/api/insights")({
         let expPendingAmount = 0;
         for (const e of expenses ?? []) {
           const amt = Number(e.amount);
-          expTotal += amt;
           const cat = e.category || "Other";
-          expByCategory[cat] = (expByCategory[cat] ?? 0) + amt;
           const m = e.method || "cash";
-          expByMethod[m] = (expByMethod[m] ?? 0) + amt;
           if (e.status === "pending") {
             expPending++;
             expPendingAmount += amt;
+            continue;
           }
+          // Only an approved expense ever reaches the cash book.
+          if (e.status !== "approved") continue;
+          expTotal += amt;
+          expByCategory[cat] = (expByCategory[cat] ?? 0) + amt;
+          expByMethod[m] = (expByMethod[m] ?? 0) + amt;
         }
 
         // Cash book — inflow and outflow per cash box.
@@ -193,7 +198,7 @@ export const Route = createFileRoute("/api/insights")({
         }
 
         // Kisti — billed, collected, and what is late.
-        const today = new Date().toISOString().slice(0, 10);
+        const today = dhakaDate();
         let kistiBilled = 0;
         let kistiCollected = 0;
         let kistiOutstanding = 0;
@@ -222,11 +227,15 @@ export const Route = createFileRoute("/api/insights")({
         const purBySupplier: Record<string, number> = {};
         let purTotal = 0;
         let purPaid = 0;
+        let purDue = 0;
         for (const p of purchases ?? []) {
           const total = Number(p.total);
           const paid = Number(p.paid);
+          const returned = Number(p.returned ?? 0);
           purTotal += total;
           purPaid += paid;
+          // What the supplier still has to be paid: total minus what came back.
+          purDue += Math.max(0, total - returned - paid);
           const name = p.suppliers?.name ?? "Unknown";
           purBySupplier[name] = (purBySupplier[name] ?? 0) + total;
         }
@@ -283,7 +292,7 @@ export const Route = createFileRoute("/api/insights")({
             count: (purchases ?? []).length,
             total: r(purTotal),
             paid: r(purPaid),
-            due: r(purTotal - purPaid),
+            due: r(purDue),
             by_supplier: Object.fromEntries(
               Object.entries(purBySupplier)
                 .sort((a, b) => b[1] - a[1])

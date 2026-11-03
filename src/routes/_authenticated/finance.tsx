@@ -75,10 +75,10 @@ function Finance() {
   const [branch, setBranch] = useState("");
   const [status, setStatus] = useState("pending");
   const { data: branches = [] } = useBranches();
-  const { data: partners = [] } = usePartners();
+  const { data: partners = [], error: partnersError } = usePartners();
   const [editingCase, setEditingCase] = useState<FinanceCaseRecord | null>(null);
   const qc = useQueryClient();
-  const { data: cases = [] } = useQuery({
+  const { data: cases = [], error: casesError } = useQuery({
     queryKey: ["finance-cases", branch, status],
     enabled: !!branch,
     queryFn: async () => {
@@ -92,7 +92,7 @@ function Finance() {
   const bname = (id: string) => branches.find((b) => b.id === id)?.name ?? "";
   // The receivable must not change when the list filter changes, so it is
   // counted from every pending case, not from the filtered list.
-  const { data: receivable = [] } = useQuery({
+  const { data: receivable = [], error: receivableError } = useQuery({
     queryKey: ["finance-cases", branch, "receivable"],
     enabled: !!branch,
     queryFn: async () => {
@@ -157,6 +157,12 @@ function Finance() {
         <BranchPicker value={branch} onChange={setBranch} allowAll />
         <NewCase partners={partners} />
       </PageHeader>
+      {(partnersError || casesError || receivableError) && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the finance data:{" "}
+          {(partnersError ?? casesError ?? receivableError)?.message}
+        </p>
+      )}
       <Tabs defaultValue="cases">
         <TabsList>
           <TabsTrigger value="cases">Finance sales</TabsTrigger>
@@ -276,7 +282,7 @@ function Finance() {
                 ))}
                 {!cases.length && (
                   <TableRow>
-                    <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
+                    <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
                       No finance sales.
                     </TableCell>
                   </TableRow>
@@ -587,7 +593,7 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
 }
 
 function Partners({ canEdit }: { canEdit: boolean }) {
-  const { data: partners = [] } = usePartners();
+  const { data: partners = [], error } = usePartners();
   const qc = useQueryClient();
   const [f, setF] = useState({ name: "", contact: "", commission_pct: "" });
   const [editing, setEditing] = useState<{
@@ -690,6 +696,11 @@ function Partners({ canEdit }: { canEdit: boolean }) {
           </Button>
         </Card>
       )}
+      {error && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the finance partners: {error.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>
@@ -750,7 +761,10 @@ function Partners({ canEdit }: { canEdit: boolean }) {
             ))}
             {!partners.length && (
               <TableRow>
-                <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                <TableCell
+                  colSpan={canEdit ? 5 : 4}
+                  className="py-8 text-center text-muted-foreground"
+                >
                   No partners yet.
                 </TableCell>
               </TableRow>

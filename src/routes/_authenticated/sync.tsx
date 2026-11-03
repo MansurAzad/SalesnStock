@@ -33,12 +33,14 @@ export const Route = createFileRoute("/_authenticated/sync")({
 function SyncPage() {
   const { t } = useT();
   const online = useOnline();
-  const box = useOutbox();
   const qc = useQueryClient();
   const { data: me } = useMe();
+  // Only this user's own queue is shown — the server attributes each synced
+  // entry to whoever is signed in when it is sent.
+  const box = useOutbox(me?.id);
   // deviceName() writes to localStorage — resolve it once, not on every render.
   const [device] = useState(deviceName);
-  const { data: conflicts = [] } = useQuery({
+  const { data: conflicts = [], error } = useQuery({
     queryKey: ["offline-conflicts"],
     queryFn: async () => {
       return fetchAllPages(
@@ -139,6 +141,11 @@ function SyncPage() {
         </Table>
       </Card>
       <h2 className="mb-2 font-semibold">Rejected on sync (all devices)</h2>
+      {error && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load the rejected entries: {error.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>

@@ -35,6 +35,7 @@ function Installments() {
   const [filter, setFilter] = useState<"due" | "upcoming" | "paid">("due");
   const [search, setSearch] = useState("");
   const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
   const { data: branches = [] } = useBranches();
   const today = localDate();
 
@@ -75,31 +76,41 @@ function Installments() {
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
 
   async function pay(id: string, due: number) {
-    const typed = Number(amounts[id]);
-    const amt = Number.isFinite(typed) && typed > 0 ? Math.min(typed, due) : due;
-    if (!(amt > 0)) {
+    const raw = amounts[id];
+    // An empty box means "collect the full due"; anything the cashier typed has
+    // to be a real amount — 0 or a negative must never turn into a full collection.
+    const typed = raw === undefined || raw.trim() === "" ? due : Number(raw);
+    if (!Number.isFinite(typed) || typed <= 0) {
       toast.error("Enter an amount greater than zero");
       return;
     }
+    const amt = Math.min(typed, due);
+    if (busy) return;
+    setBusy(true);
     const offline = async () => {
-      await enqueue("kisti", { inst: id, amount: amt }, `Kisti ${taka(amt)}`);
+      await enqueue("kisti", { inst: id, amount: amt }, `Kisti ${taka(amt)}`, me?.id);
       toast.success("Offline — collection saved and will sync when internet returns");
     };
-    if (!navigator.onLine) {
-      await offline();
-      return;
+    try {
+      if (!navigator.onLine) {
+        await offline();
+        return;
+      }
+      const { error } = await supabase.rpc("pay_installment", { _inst: id, _amount: amt });
+      if (error && isNetworkError(error)) {
+        await offline();
+        return;
+      }
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+      toast.success(`${taka(amt)} collected`);
+      setAmounts((prev) => ({ ...prev, [id]: "" }));
+      qc.invalidateQueries();
+    } finally {
+      setBusy(false);
     }
-    const { error } = await supabase.rpc("pay_installment", { _inst: id, _amount: amt });
-    if (error && isNetworkError(error)) {
-      await offline();
-      return;
-    }
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-    toast.success(`${taka(amt)} collected`);
-    qc.invalidateQueries();
   }
 
   return (
@@ -202,7 +213,7 @@ function Installments() {
                               setAmounts((prev) => ({ ...prev, [r.id]: e.target.value }))
                             }
                           />
-                          <Button size="sm" onClick={() => pay(r.id, due)}>
+                          <Button size="sm" disabled={busy} onClick={() => pay(r.id, due)}>
                             {t("Pay")}
                           </Button>
                         </>

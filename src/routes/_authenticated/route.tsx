@@ -38,7 +38,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { logoSrc } from "@/lib/brand";
-import { syncNow, useOnline, useOutbox, clearOutbox } from "@/lib/offline";
+import { syncNow, useOnline, useOutbox } from "@/lib/offline";
 import { toast } from "sonner";
 import { CloudOff, RefreshCw, Cloud } from "lucide-react";
 
@@ -93,12 +93,9 @@ function Layout() {
     } catch {
       /* nothing persisted */
     }
-    // Queued offline entries belong to the user who made them; drop them too.
-    try {
-      await clearOutbox();
-    } catch {
-      /* nothing queued */
-    }
+    // The offline queue is not cleared: it holds sales that have not reached the
+    // server yet. Every entry carries the user who made it, so the next user on
+    // this device never sees or syncs them.
     await supabase.auth.signOut();
     navigate({ to: "/auth", replace: true });
   }
@@ -118,7 +115,7 @@ function Layout() {
   }, [open]);
   const bottom = [nav[0], nav[1], nav[2]];
   const online = useOnline();
-  const box = useOutbox();
+  const box = useOutbox(me?.id);
   useEffect(() => {
     if (!online) return;
     const run = async () => {
