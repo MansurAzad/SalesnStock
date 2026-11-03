@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { localDate } from "@/lib/date";
 
 export const Route = createFileRoute("/_authenticated/installments")({
   head: () => ({ meta: [{ title: "Installments — Dealer ERP" }] }),
@@ -35,15 +36,17 @@ function Installments() {
   const [search, setSearch] = useState("");
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const { data: branches = [] } = useBranches();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
 
-  const { data = [] } = useQuery({
+  const { data = [], error } = useQuery({
     queryKey: ["installments", branch],
     enabled: !!branch,
     queryFn: async () => {
       let q = supabase
         .from("installments")
-        .select("*, installment_plans(months, sales(invoice_no), customers(name,phone))")
+        .select(
+          "*, installment_plans(customer_id, months, sales(invoice_no), customers(name,phone))",
+        )
         .eq("cancelled", false)
         .order("due_date");
       if (branch !== "all") q = q.eq("branch_id", branch);
@@ -72,7 +75,12 @@ function Installments() {
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
 
   async function pay(id: string, due: number) {
-    const amt = Number(amounts[id] ?? due);
+    const typed = Number(amounts[id]);
+    const amt = Number.isFinite(typed) && typed > 0 ? Math.min(typed, due) : due;
+    if (!(amt > 0)) {
+      toast.error("Enter an amount greater than zero");
+      return;
+    }
     const offline = async () => {
       await enqueue("kisti", { inst: id, amount: amt }, `Kisti ${taka(amt)}`);
       toast.success("Offline — collection saved and will sync when internet returns");
@@ -106,6 +114,7 @@ function Installments() {
             size="sm"
             variant={filter === f ? "default" : "outline"}
             onClick={() => setFilter(f)}
+            aria-pressed={filter === f}
             className="capitalize"
           >
             {f === "due" ? "Due / overdue" : f}
@@ -118,6 +127,14 @@ function Installments() {
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
+      {error && (
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          Could not load installments: {error.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>
@@ -139,7 +156,17 @@ function Installments() {
               return (
                 <TableRow key={r.id}>
                   <TableCell>
-                    {r.installment_plans?.customers?.name}
+                    {r.installment_plans?.customer_id ? (
+                      <Link
+                        to="/customers/$customerId"
+                        params={{ customerId: r.installment_plans.customer_id }}
+                        className="text-primary hover:underline"
+                      >
+                        {r.installment_plans?.customers?.name}
+                      </Link>
+                    ) : (
+                      r.installment_plans?.customers?.name
+                    )}
                     <div className="text-xs text-muted-foreground">
                       {r.installment_plans?.customers?.phone}
                     </div>
@@ -162,20 +189,32 @@ function Installments() {
                   <TableCell className="text-right tabular">{taka(r.amount)}</TableCell>
                   <TableCell className="text-right tabular">{taka(due)}</TableCell>
                   <TableCell className="text-right">
-                    {due > 0 && canCollect(r.branch_id) && (
-                      <div className="flex justify-end gap-1">
-                        <Input
-                          type="number"
-                          className="h-8 w-24"
-                          placeholder={String(due)}
-                          value={amounts[r.id] ?? ""}
-                          onChange={(e) => setAmounts({ ...amounts, [r.id]: e.target.value })}
-                        />
-                        <Button size="sm" onClick={() => pay(r.id, due)}>
-                          {t("Pay")}
-                        </Button>
-                      </div>
-                    )}
+                    <div className="flex items-center justify-end gap-2">
+                      {due > 0 && canCollect(r.branch_id) && (
+                        <>
+                          <Input
+                            type="number"
+                            className="h-8 w-24"
+                            aria-label={`Amount to collect for invoice ${r.installment_plans?.sales?.invoice_no ?? ""}`}
+                            placeholder={String(due)}
+                            value={amounts[r.id] ?? ""}
+                            onChange={(e) =>
+                              setAmounts((prev) => ({ ...prev, [r.id]: e.target.value }))
+                            }
+                          />
+                          <Button size="sm" onClick={() => pay(r.id, due)}>
+                            {t("Pay")}
+                          </Button>
+                        </>
+                      )}
+                      <Link
+                        to="/kisti-receipt/$installmentId"
+                        params={{ installmentId: r.id }}
+                        className="text-sm text-primary hover:underline"
+                      >
+                        Receipt
+                      </Link>
+                    </div>
                   </TableCell>
                 </TableRow>
               );
@@ -183,7 +222,7 @@ function Installments() {
             {rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
-                  Nothing here.
+                  {error ? "Could not load installments." : "Nothing here."}
                 </TableCell>
               </TableRow>
             )}

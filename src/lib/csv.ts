@@ -1,11 +1,21 @@
 export function toCsv(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return "";
-  const headers = Object.keys(rows[0] ?? {});
+  // Every key of every row — a key that only appears on a later row would
+  // otherwise be dropped from the export.
+  const headers = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   const esc = (v: unknown) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    if (v === null || v === undefined) return "";
+    // Numbers stay numeric so Excel can total them; only text is quoted.
+    if (typeof v === "number") return String(v);
+    const s = String(v);
+    // Neutralise spreadsheet formula injection (=, +, -, @, tab, CR).
+    const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+    return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
-  return [headers.map(esc).join(","), ...rows.map((r) => headers.map((h) => esc(r[h])).join(","))].join("\r\n");
+  return [
+    headers.map(esc).join(","),
+    ...rows.map((r) => headers.map((h) => esc(r[h])).join(",")),
+  ].join("\r\n");
 }
 
 export function downloadCsv(rows: Record<string, unknown>[], filename: string) {

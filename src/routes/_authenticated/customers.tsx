@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -18,7 +18,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 
 export const Route = createFileRoute("/_authenticated/customers")({
@@ -33,20 +39,22 @@ function Customers() {
   const [branch, setBranch] = useState("");
   const [q, setQ] = useState("");
   const [f, setF] = useState({ name: "", phone: "", nid: "", address: "" });
+  const [addBranchId, setAddBranchId] = useState("");
   const [editing, setEditing] = useState<{
     id: string;
     name: string;
     phone: string;
+    nid: string;
     address: string;
   } | null>(null);
   const { data: branches = [] } = useBranches();
-  const { data = [] } = useQuery({
+  const { data = [], error } = useQuery({
     queryKey: ["customers", branch],
     enabled: !!branch,
     queryFn: async () => {
       let qq = supabase
         .from("customers")
-        .select("id,name,phone,address,branch_id,created_at")
+        .select("id,name,phone,nid,address,branch_id,created_at")
         .order("created_at", { ascending: false });
       if (branch !== "all") qq = qq.eq("branch_id", branch);
       return fetchAllPages(qq);
@@ -56,20 +64,38 @@ function Customers() {
     (c) => !q || c.name.toLowerCase().includes(q.toLowerCase()) || c.phone.includes(q),
   );
   const bname = (id: string) => branches.find((b) => b.id === id)?.name ?? "";
+  const hasCustomerRole =
+    !!me && me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r));
+  const canManage = (c: { branch_id: string }) =>
+    !!me && (me.canWriteHq || (me.branch_id === c.branch_id && hasCustomerRole));
+  const showActions = !!me && (me.canWriteHq || hasCustomerRole);
   const canAdd =
     !!me &&
-    !!branch &&
-    branch !== "all" &&
-    (me.canWriteHq ||
-      (me.branch_id === branch &&
-        me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
+    (me.canWriteHq
+      ? branch !== "all" || branches.length > 0
+      : !!branch && branch !== "all" && me.branch_id === branch && hasCustomerRole);
+  const addBranch = branch !== "all" ? branch : addBranchId;
 
   async function add() {
+    if (!f.name.trim()) {
+      toast.error("Enter a customer name");
+      return;
+    }
     if (!/^01\d{9}$/.test(f.phone)) {
       toast.error("Phone must be 11 digits starting with 01");
       return;
     }
-    const { error } = await supabase.from("customers").insert({ ...f, branch_id: branch });
+    if (!addBranch) {
+      toast.error("Choose a branch");
+      return;
+    }
+    const { error } = await supabase.from("customers").insert({
+      name: f.name.trim(),
+      phone: f.phone,
+      nid: f.nid.trim() || null,
+      address: f.address.trim() || null,
+      branch_id: addBranch,
+    });
     if (error) {
       toast.error(error.message);
       return;
@@ -80,13 +106,23 @@ function Customers() {
   }
 
   async function saveCustomer() {
-    if (!editing || !/^01\d{9}$/.test(editing.phone)) {
+    if (!editing) return;
+    if (!editing.name.trim()) {
+      toast.error("Enter a customer name");
+      return;
+    }
+    if (!/^01\d{9}$/.test(editing.phone)) {
       toast.error("Phone must be 11 digits starting with 01");
       return;
     }
     const { error } = await supabase
       .from("customers")
-      .update({ name: editing.name.trim(), phone: editing.phone, address: editing.address || null })
+      .update({
+        name: editing.name.trim(),
+        phone: editing.phone,
+        nid: editing.nid.trim() || null,
+        address: editing.address.trim() || null,
+      })
       .eq("id", editing.id);
     if (error) {
       toast.error(error.message);
@@ -123,17 +159,38 @@ function Customers() {
         <BranchPicker value={branch} onChange={setBranch} allowAll />
       </PageHeader>
       {canAdd && (
-        <Card className="mb-4 flex flex-wrap gap-2 p-4">
+        <Card className="mb-4 flex flex-wrap items-end gap-2 p-4">
+          {branch === "all" && (
+            <div className="space-y-1">
+              <Label className="text-xs">Branch</Label>
+              <select
+                className="w-48 rounded-md border bg-background px-2 py-2"
+                value={addBranchId}
+                onChange={(e) => setAddBranchId(e.target.value)}
+              >
+                <option value="">Choose…</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {(["name", "phone", "nid", "address"] as const).map((k) => (
-            <Input
-              key={k}
-              className="w-48"
-              placeholder={k === "nid" ? "NID" : t(k.charAt(0).toUpperCase() + k.slice(1))}
-              value={f[k]}
-              onChange={(e) => setF({ ...f, [k]: e.target.value })}
-            />
+            <div key={k} className="space-y-1">
+              <Label className="text-xs">
+                {k === "nid" ? "NID" : t(k.charAt(0).toUpperCase() + k.slice(1))}
+              </Label>
+              <Input
+                className="w-48"
+                placeholder={k === "nid" ? "NID" : t(k.charAt(0).toUpperCase() + k.slice(1))}
+                value={f[k]}
+                onChange={(e) => setF({ ...f, [k]: e.target.value })}
+              />
+            </div>
           ))}
-          <Button onClick={add} disabled={!f.name || !f.phone}>
+          <Button onClick={add} disabled={!f.name.trim() || !f.phone || !addBranch}>
             {t("Add")}
           </Button>
         </Card>
@@ -144,6 +201,14 @@ function Customers() {
         onChange={(e) => setQ(e.target.value)}
         className="mb-3 max-w-xs bg-card"
       />
+      {error && (
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          Could not load customers: {error.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>
@@ -152,46 +217,75 @@ function Customers() {
               <TableHead>{t("Phone")}</TableHead>
               <TableHead>{t("Address")}</TableHead>
               <TableHead>{t("Branch")}</TableHead>
-              {canAdd && <TableHead />}
+              {showActions && <TableHead />}
             </TableRow>
           </TableHeader>
           <TableBody>
             {shown.map((c) => (
               <TableRow key={c.id}>
-                <TableCell className="font-medium">{c.name}</TableCell>
+                <TableCell className="font-medium">
+                  <Link
+                    to="/customers/$customerId"
+                    params={{ customerId: c.id }}
+                    className="text-primary hover:underline"
+                  >
+                    {c.name}
+                  </Link>
+                </TableCell>
                 <TableCell>{c.phone}</TableCell>
                 <TableCell>{c.address}</TableCell>
                 <TableCell>{bname(c.branch_id)}</TableCell>
-                {canAdd && (
+                {showActions && (
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setEditing({
-                            id: c.id,
-                            name: c.name,
-                            phone: c.phone,
-                            address: c.address ?? "",
-                          })
-                        }
-                      >
-                        Edit
+                      <Button size="sm" variant="outline" asChild>
+                        <Link to="/customers/$customerId" params={{ customerId: c.id }}>
+                          View
+                        </Link>
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-destructive"
-                        onClick={() => deleteCustomer(c)}
-                      >
-                        Delete
-                      </Button>
+                      {canManage(c) && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              setEditing({
+                                id: c.id,
+                                name: c.name,
+                                phone: c.phone,
+                                nid: c.nid ?? "",
+                                address: c.address ?? "",
+                              })
+                            }
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive"
+                            onClick={() => deleteCustomer(c)}
+                          >
+                            Delete
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 )}
               </TableRow>
             ))}
+            {shown.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                  {error
+                    ? "Could not load customers."
+                    : data.length
+                      ? "No customers match this search."
+                      : "No customers yet."}
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </Card>
@@ -204,9 +298,10 @@ function Customers() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit customer</DialogTitle>
+            <DialogDescription>Update this customer's contact details.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            {(["name", "phone", "address"] as const).map((field) => (
+            {(["name", "phone", "nid", "address"] as const).map((field) => (
               <div key={field} className="space-y-1">
                 <Label className="capitalize">{field}</Label>
                 <Input

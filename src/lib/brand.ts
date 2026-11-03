@@ -1,2 +1,4 @@
+import { safeUrl } from "@/lib/url";
+
 export const DEFAULT_LOGO = "/logo.png";
-export const logoSrc = (url?: string | null) => url || DEFAULT_LOGO;
+export const logoSrc = (url?: string | null) => safeUrl(url) ?? DEFAULT_LOGO;

@@ -120,6 +120,34 @@
       "when": 1793644123298,
       "tag": "0016_inventory_damage_workflow",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793644999000,
+      "tag": "0017_security_and_integrity_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793645110000,
+      "tag": "0018_user_role_admin_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793645220000,
+      "tag": "0019_feature_additions",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793645330000,
+      "tag": "0020_reporting_aggregates",
+      "breakpoints": true
     }
   ]
 }

@@ -1,16 +1,44 @@
-import { createFileRoute, Link, Outlet, redirect, useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  Outlet,
+  redirect,
+  useNavigate,
+  useRouterState,
+} from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import { del as idbDel } from "idb-keyval";
 import { supabase } from "@/integrations/supabase/client";
 import { useMe, roleLabel, useSettings } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
 import {
-  LayoutDashboard, Boxes, ArrowLeftRight, ShoppingCart, Receipt, Users, CalendarClock,
-  Wallet, Store, ShieldCheck, LogOut, Menu, X, Smartphone, Landmark, IdCard, Barcode, Settings, FileBarChart, Sparkles, PackagePlus, ReceiptText, History,
+  LayoutDashboard,
+  Boxes,
+  ArrowLeftRight,
+  ShoppingCart,
+  Receipt,
+  Users,
+  CalendarClock,
+  Wallet,
+  Store,
+  ShieldCheck,
+  LogOut,
+  Menu,
+  X,
+  Landmark,
+  IdCard,
+  Barcode,
+  Settings,
+  FileBarChart,
+  Sparkles,
+  PackagePlus,
+  ReceiptText,
+  History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { logoSrc } from "@/lib/brand";
-import { syncNow, useOnline, useOutbox } from "@/lib/offline";
+import { syncNow, useOnline, useOutbox, clearOutbox } from "@/lib/offline";
 import { toast } from "sonner";
 import { CloudOff, RefreshCw, Cloud } from "lucide-react";
 
@@ -58,13 +86,36 @@ function Layout() {
   async function signOut() {
     await qc.cancelQueries();
     qc.clear();
+    // The query cache is persisted to IndexedDB — drop it too, otherwise the
+    // next user on this device could see the previous user's data.
+    try {
+      await idbDel("erp-query-cache");
+    } catch {
+      /* nothing persisted */
+    }
+    // Queued offline entries belong to the user who made them; drop them too.
+    try {
+      await clearOutbox();
+    } catch {
+      /* nothing queued */
+    }
     await supabase.auth.signOut();
     navigate({ to: "/auth", replace: true });
   }
 
   const noAccess = me && me.roles.length === 0;
   const [open, setOpen] = useState(false);
-  useEffect(() => { setOpen(false); }, [path]);
+  useEffect(() => {
+    setOpen(false);
+  }, [path]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   const bottom = [nav[0], nav[1], nav[2]];
   const online = useOnline();
   const box = useOutbox();
@@ -72,8 +123,12 @@ function Layout() {
     if (!online) return;
     const run = async () => {
       const r = await syncNow();
-      if (r.applied) { toast.success(`${r.applied} offline entries synced`); qc.invalidateQueries(); }
-      if (r.conflicts) toast.error(`${r.conflicts} offline entries could not be applied — see Offline sync`);
+      if (r.applied) {
+        toast.success(`${r.applied} offline entries synced`);
+        qc.invalidateQueries();
+      }
+      if (r.conflicts)
+        toast.error(`${r.conflicts} offline entries could not be applied — see Offline sync`);
     };
     void run();
     const id = setInterval(run, 60000);
@@ -82,11 +137,25 @@ function Layout() {
 
   return (
     <div className="flex min-h-[100dvh]">
-      {open && <div className="fixed inset-0 z-40 bg-foreground/50 md:hidden print:hidden" onClick={() => setOpen(false)} />}
-      <aside className={`print:hidden fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 md:sticky md:top-0 md:w-60 md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}>
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-foreground/50 md:hidden print:hidden"
+          onClick={() => setOpen(false)}
+        />
+      )}
+      <aside
+        className={`print:hidden fixed inset-y-0 left-0 z-50 flex h-[100dvh] w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 md:sticky md:top-0 md:w-60 md:translate-x-0 ${open ? "translate-x-0" : "-translate-x-full"}`}
+      >
         <div className="flex items-center gap-2 px-5 py-5 font-display font-semibold">
-          <img src={logoSrc(settings?.logo_url)} alt="Logo" className="h-8 w-8 rounded-md bg-card object-contain p-0.5" /> <span className="flex-1 truncate">{settings?.company_name ?? "Dealer ERP"}</span>
-          <button className="md:hidden" onClick={() => setOpen(false)} aria-label="Close menu"><X className="h-5 w-5" /></button>
+          <img
+            src={logoSrc(settings?.logo_url)}
+            alt="Logo"
+            className="h-8 w-8 rounded-md bg-card object-contain p-0.5"
+          />{" "}
+          <span className="flex-1 truncate">{settings?.company_name ?? "Dealer ERP"}</span>
+          <button className="md:hidden" onClick={() => setOpen(false)} aria-label="Close menu">
+            <X className="h-5 w-5" />
+          </button>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3">
           {nav
@@ -115,6 +184,8 @@ function Layout() {
               <button
                 key={l}
                 onClick={() => setLang(l)}
+                aria-pressed={lang === l}
+                aria-label={l === "en" ? "Switch to English" : "Switch to Bangla"}
                 className={`flex-1 rounded py-1 ${lang === l ? "bg-sidebar-primary text-sidebar-primary-foreground" : ""}`}
               >
                 {l === "en" ? "English" : "বাংলা"}
@@ -122,20 +193,36 @@ function Layout() {
             ))}
           </div>
           <div>
-            <div className="truncate font-medium text-sidebar-accent-foreground">{me?.full_name ?? me?.email}</div>
-            <div className="opacity-60">{me?.roles.map((r) => roleLabel[r]).join(", ") || "No role"}</div>
+            <div className="truncate font-medium text-sidebar-accent-foreground">
+              {me?.full_name ?? me?.email}
+            </div>
+            <div className="opacity-60">
+              {me?.roles.map((r) => roleLabel[r]).join(", ") || "No role"}
+            </div>
           </div>
-          <button onClick={signOut} className="flex items-center gap-2 opacity-80 hover:opacity-100">
+          <button
+            onClick={signOut}
+            className="flex items-center gap-2 opacity-80 hover:opacity-100"
+          >
             <LogOut className="h-3.5 w-3.5" /> {t("Sign out")}
           </button>
         </div>
       </aside>
       <main className="min-w-0 flex-1 p-3 pb-24 sm:p-5 sm:pb-24 md:p-8 print:p-0">
         {(!online || box.pending > 0 || box.conflicts > 0) && (
-          <Link to="/sync" className={`print:hidden mb-4 flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${online ? "border-accent bg-accent/15" : "border-warning bg-warning/15"}`}>
-            {online ? <Cloud className="h-4 w-4 shrink-0" /> : <CloudOff className="h-4 w-4 shrink-0" />}
+          <Link
+            to="/sync"
+            className={`print:hidden mb-4 flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${online ? "border-accent bg-accent/15" : "border-warning bg-warning/15"}`}
+          >
+            {online ? (
+              <Cloud className="h-4 w-4 shrink-0" />
+            ) : (
+              <CloudOff className="h-4 w-4 shrink-0" />
+            )}
             <span className="min-w-0 flex-1">
-              {online ? t("Online") : t("Offline — sales, kisti and expenses are saved on this device")}
+              {online
+                ? t("Online")
+                : t("Offline — sales, kisti and expenses are saved on this device")}
               {box.pending > 0 && ` · ${box.pending} ${t("waiting to sync")}`}
               {box.conflicts > 0 && ` · ${box.conflicts} ${t("need attention")}`}
             </span>
@@ -159,12 +246,20 @@ function Layout() {
         {bottom.map((n) => {
           const active = path.startsWith(n.to);
           return (
-            <Link key={n.to} to={n.to} className={`flex flex-col items-center gap-0.5 py-2 text-[11px] ${active ? "font-semibold text-primary" : "text-muted-foreground"}`}>
+            <Link
+              key={n.to}
+              to={n.to}
+              className={`flex flex-col items-center gap-0.5 py-2 text-[11px] ${active ? "font-semibold text-primary" : "text-muted-foreground"}`}
+            >
               <n.icon className="h-5 w-5" /> {t(n.label)}
             </Link>
           );
         })}
-        <button onClick={() => setOpen((o) => !o)} aria-label="Menu" className={`flex flex-col items-center gap-0.5 py-2 text-[11px] ${open ? "font-semibold text-primary" : "text-muted-foreground"}`}>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          aria-label="Menu"
+          className={`flex flex-col items-center gap-0.5 py-2 text-[11px] ${open ? "font-semibold text-primary" : "text-muted-foreground"}`}
+        >
           {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />} {t("Menu")}
         </button>
       </nav>

@@ -5,7 +5,8 @@ function refused(): boolean {
   if (window.self !== window.top) return true;
   const h = window.location.hostname.toLowerCase();
   const first = h.split(".")[0] ?? "";
-  const lovableish = h.endsWith(".lovable.app") || h.endsWith(".gpt-eng.com") || h.endsWith(".gptengineer.run");
+  const lovableish =
+    h.endsWith(".lovable.app") || h.endsWith(".gpt-eng.com") || h.endsWith(".gptengineer.run");
   if (lovableish && /^(?:id-preview|preview)(?:-[a-z0-9]+)?--.+$/.test(first)) return true;
   if (lovableish && /^project--[^.]+-dev$/.test(first)) return true;
   if (h === "lovableproject.com" || h.endsWith(".lovableproject.com")) return true;
@@ -19,7 +20,9 @@ export async function registerOfflineShell() {
   if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
   if (refused()) {
     const regs = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(regs.filter((r) => r.active?.scriptURL.endsWith("/sw.js")).map((r) => r.unregister()));
+    await Promise.all(
+      regs.filter((r) => r.active?.scriptURL.endsWith("/sw.js")).map((r) => r.unregister()),
+    );
     return;
   }
   try {

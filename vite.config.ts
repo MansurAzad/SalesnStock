@@ -35,12 +35,21 @@ export default defineConfig({
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           runtimeCaching: [
             {
-              urlPattern: ({ request, url }) => request.mode === "navigate" && !url.pathname.startsWith("/~oauth") && !url.pathname.startsWith("/api"),
+              urlPattern: ({ request, url }) =>
+                request.mode === "navigate" &&
+                !url.pathname.startsWith("/~oauth") &&
+                !url.pathname.startsWith("/api"),
               handler: "NetworkFirst",
-              options: { cacheName: "erp-pages", networkTimeoutSeconds: 4, expiration: { maxEntries: 60 } },
+              options: {
+                cacheName: "erp-pages",
+                networkTimeoutSeconds: 4,
+                expiration: { maxEntries: 60 },
+              },
             },
             {
-              urlPattern: ({ url }) => url.origin === "https://fonts.googleapis.com" || url.origin === "https://fonts.gstatic.com",
+              urlPattern: ({ url }) =>
+                url.origin === "https://fonts.googleapis.com" ||
+                url.origin === "https://fonts.gstatic.com",
               handler: "StaleWhileRevalidate",
               options: { cacheName: "erp-fonts" },
             },

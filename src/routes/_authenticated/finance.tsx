@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -61,8 +62,10 @@ type FinanceCaseRecord = {
   customer_phone: string | null;
   ref_no: string | null;
   amount: number;
+  commission: number;
   note: string | null;
   status: string;
+  sale_id: string | null;
   created_by: string | null;
 };
 
@@ -87,9 +90,22 @@ function Finance() {
   });
   const pname = (id: string) => partners.find((p) => p.id === id)?.name ?? "";
   const bname = (id: string) => branches.find((b) => b.id === id)?.name ?? "";
-  const pendingTotal = cases
-    .filter((c) => c.status === "pending")
-    .reduce((a, c) => a + Number(c.amount), 0);
+  // The receivable must not change when the list filter changes, so it is
+  // counted from every pending case, not from the filtered list.
+  const { data: receivable = [] } = useQuery({
+    queryKey: ["finance-cases", branch, "receivable"],
+    enabled: !!branch,
+    queryFn: async () => {
+      let q = supabase
+        .from("finance_cases")
+        .select("amount")
+        .eq("status", "pending")
+        .order("created_at", { ascending: false });
+      if (branch !== "all") q = q.eq("branch_id", branch);
+      return fetchAllPages(q);
+    },
+  });
+  const pendingTotal = receivable.reduce((a, c) => a + Number(c.amount), 0);
 
   async function settle(id: string, amount: number, pct: number) {
     const v = prompt(
@@ -97,7 +113,12 @@ function Finance() {
       String(Math.round(amount * (1 - pct / 100))),
     );
     if (v === null) return;
-    const { error } = await supabase.rpc("settle_finance", { _case: id, _received: Number(v) });
+    const received = Number(v);
+    if (!Number.isFinite(received) || received <= 0) {
+      toast.error("Enter an amount greater than zero");
+      return;
+    }
+    const { error } = await supabase.rpc("settle_finance", { _case: id, _received: received });
     if (error) {
       toast.error(error.message);
       return;
@@ -168,8 +189,10 @@ function Finance() {
                   <TableHead>Partner</TableHead>
                   <TableHead>Ref</TableHead>
                   <TableHead>{t("Customer")}</TableHead>
+                  <TableHead>Invoice</TableHead>
                   <TableHead className="text-right">{t("Amount")}</TableHead>
-                  <TableHead className="text-right">Commission</TableHead>
+                  <TableHead className="text-right">Received</TableHead>
+                  <TableHead>Partner fee</TableHead>
                   <TableHead>{t("Status")}</TableHead>
                   <TableHead />
                 </TableRow>
@@ -187,9 +210,27 @@ function Finance() {
                       {c.customer_name}{" "}
                       <span className="text-xs text-muted-foreground">{c.customer_phone}</span>
                     </TableCell>
+                    <TableCell>
+                      {c.sale_id ? (
+                        <Link
+                          to="/receipt/$saleId"
+                          params={{ saleId: c.sale_id }}
+                          className="text-sm text-primary hover:underline"
+                        >
+                          View invoice
+                        </Link>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right tabular">{taka(c.amount)}</TableCell>
                     <TableCell className="text-right tabular">
-                      {c.status === "settled" ? taka(c.commission) : "—"}
+                      {c.status === "settled" ? taka(Number(c.amount) - Number(c.commission)) : "—"}
+                    </TableCell>
+                    <TableCell className="tabular">
+                      {partners.find((p) => p.id === c.partner_id)?.commission_pct != null
+                        ? `${partners.find((p) => p.id === c.partner_id)?.commission_pct}%`
+                        : "—"}
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="capitalize">
@@ -235,7 +276,7 @@ function Finance() {
                 ))}
                 {!cases.length && (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
+                    <TableCell colSpan={10} className="py-8 text-center text-muted-foreground">
                       No finance sales.
                     </TableCell>
                   </TableRow>
@@ -320,6 +361,9 @@ function EditFinanceCaseDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Edit pending finance case</DialogTitle>
+          <DialogDescription>
+            Only pending cases can be edited. Settled cases are locked.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Select value={f.partner_id} onValueChange={(partner_id) => setF({ ...f, partner_id })}>
@@ -375,6 +419,7 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
     ref_no: "",
     amount: "",
     note: "",
+    sale_id: "",
   });
   const branchOptions = me?.isHq ? branches : branches.filter((b) => b.id === me?.branch_id);
   const canCreate =
@@ -382,15 +427,48 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
     (me.canWriteHq ||
       (!!me.branch_id &&
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
+  // The invoice this case belongs to — so the partner case and the POS sale
+  // are never two unlinked records.
+  const { data: sales = [] } = useQuery({
+    queryKey: ["finance-sale-picker", f.branch_id || me?.branch_id || ""],
+    enabled: open && !!(f.branch_id || me?.branch_id),
+    queryFn: async () => {
+      const branchId = f.branch_id || me?.branch_id || "";
+      let q = supabase
+        .from("sales")
+        .select("id, invoice_no, total, created_at")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (branchId && branchId !== "all") q = q.eq("branch_id", branchId);
+      const { data } = await q;
+      return data ?? [];
+    },
+  });
   async function save() {
-    const { error } = await supabase
-      .from("finance_cases")
-      .insert({
-        ...f,
-        branch_id: f.branch_id || me?.branch_id || "",
-        amount: Number(f.amount),
-        created_by: me!.id,
-      });
+    const amount = Number(f.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter an amount greater than zero");
+      return;
+    }
+    if (!f.partner_id || !f.customer_name.trim()) {
+      toast.error("Partner and customer name are required");
+      return;
+    }
+    const branchId = f.branch_id || me?.branch_id || "";
+    if (!branchId) {
+      toast.error("Select a branch");
+      return;
+    }
+    const { error } = await supabase.rpc("create_finance_case", {
+      _branch: branchId,
+      _partner: f.partner_id,
+      _customer: f.customer_name.trim(),
+      _phone: f.customer_phone.trim(),
+      _ref: f.ref_no.trim(),
+      _amount: amount,
+      _note: f.note.trim(),
+      _sale: f.sale_id || null,
+    });
     if (error) {
       toast.error(error.message);
       return;
@@ -405,6 +483,7 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
       ref_no: "",
       amount: "",
       note: "",
+      sale_id: "",
     });
     qc.invalidateQueries({ queryKey: ["finance-cases"] });
   }
@@ -417,6 +496,9 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Record finance sale</DialogTitle>
+          <DialogDescription>
+            Record a dealer finance sale. It becomes a pending case until settled.
+          </DialogDescription>
         </DialogHeader>
         <p className="text-xs text-muted-foreground">
           Sell the phone in POS first (cash, method "bank"), then record the amount the finance
@@ -449,11 +531,38 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
                 ))}
             </SelectContent>
           </Select>
+          <div>
+            <Label className="text-xs">POS invoice</Label>
+            <Select
+              value={f.sale_id}
+              onValueChange={(v) => {
+                const s = sales.find((x) => x.id === v);
+                setF({
+                  ...f,
+                  sale_id: v,
+                  // Pull the amount across so it does not have to be typed twice.
+                  amount: s ? String(s.total) : f.amount,
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Link an invoice (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                {sales.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.invoice_no} — {taka(s.total)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           {(["customer_name", "customer_phone", "ref_no", "amount", "note"] as const).map((k) => (
             <div key={k}>
               <Label className="text-xs capitalize">{k.replace("_", " ")}</Label>
               <Input
                 type={k === "amount" ? "number" : "text"}
+                min={k === "amount" ? "0.01" : undefined}
                 value={f[k]}
                 onChange={(e) => setF({ ...f, [k]: e.target.value })}
               />
@@ -464,8 +573,8 @@ function NewCase({ partners }: { partners: { id: string; name: string; active: b
             disabled={
               !f.partner_id ||
               !(f.branch_id || me?.branch_id) ||
-              !f.customer_name ||
-              !Number(f.amount)
+              !f.customer_name.trim() ||
+              !(Number(f.amount) > 0)
             }
             onClick={save}
           >
@@ -658,6 +767,7 @@ function Partners({ canEdit }: { canEdit: boolean }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit finance partner</DialogTitle>
+            <DialogDescription>Update this partner's name and commission.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1">

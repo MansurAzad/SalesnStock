@@ -1,9 +1,12 @@
 /** Luhn checksum used by every valid 15-digit IMEI. */
 export function isValidImei(code: string): boolean {
-  if (!/^\d{15}$/.test(code)) return false;
+  if (!/^\d{15,16}$/.test(code)) return false;
+  // A 16-digit IMEI carries a spare bit as the last digit; the Luhn check
+  // digit is still the 15th, so the trailing digit is ignored.
+  const base = code.slice(0, 15);
   let sum = 0;
   for (let i = 0; i < 15; i++) {
-    let d = Number(code[i]);
+    let d = Number(base[i]);
     if (i % 2 === 1) {
       d *= 2;
       if (d > 9) d -= 9;
@@ -13,7 +16,11 @@ export function isValidImei(code: string): boolean {
   return sum % 10 === 0;
 }
 
-/** Pulls a 15-digit IMEI out of raw scanner text (e.g. "IMEI1:356938035643809"). */
+/**
+ * Pulls an IMEI out of raw scanner text (e.g. "IMEI1:356938035643809").
+ * Prefers a Luhn-valid candidate; falls back to the first 15-digit run so a
+ * scanned code is never silently dropped at the counter.
+ */
 export function extractImei(raw: string): string | null {
   const m = raw.replace(/\s/g, "").match(/\d{15,17}/g);
   if (!m) return null;
@@ -21,5 +28,6 @@ export function extractImei(raw: string): string | null {
     const c = s.slice(0, 15);
     if (isValidImei(c)) return c;
   }
-  return null;
+  const fallback = m[0]?.slice(0, 15);
+  return fallback && /^\d{15}$/.test(fallback) ? fallback : null;
 }

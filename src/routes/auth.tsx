@@ -126,15 +126,23 @@ function AuthPage() {
           )}
           {mode === "up" && (
             <div className="space-y-1.5">
-              <Label>Full name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} required />
+              <Label htmlFor="auth-name">Full name</Label>
+              <Input
+                id="auth-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoComplete="name"
+                required
+              />
             </div>
           )}
           {mode !== "sent" && (
             <div className="space-y-1.5">
-              <Label>Email</Label>
+              <Label htmlFor="auth-email">Email</Label>
               <Input
+                id="auth-email"
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -144,9 +152,11 @@ function AuthPage() {
           )}
           {mode !== "sent" && mode !== "reset" && (
             <div className="space-y-1.5">
-              <Label>Password</Label>
+              <Label htmlFor="auth-password">Password</Label>
               <Input
+                id="auth-password"
                 type="password"
+                autoComplete="current-password"
                 minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -156,9 +166,11 @@ function AuthPage() {
           )}
           {mode === "reset" && (
             <div className="space-y-1.5">
-              <Label>New password</Label>
+              <Label htmlFor="auth-new-password">New password</Label>
               <Input
+                id="auth-new-password"
                 type="password"
+                autoComplete="new-password"
                 minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

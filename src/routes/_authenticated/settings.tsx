@@ -14,7 +14,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/_authenticated/settings")({
-  head: () => ({ meta: [{ title: "Branding settings — Dealer ERP" }, { name: "description", content: "Company name, logo and invoice details." }] }),
+  head: () => ({
+    meta: [
+      { title: "Branding settings — Dealer ERP" },
+      { name: "description", content: "Company name, logo and invoice details." },
+    ],
+  }),
   component: SettingsPage,
 });
 
@@ -33,16 +38,34 @@ function SettingsPage() {
   const qc = useQueryClient();
   const [f, setF] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (data) setF(Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? "" : String(v)])));
+    if (data)
+      setF(
+        Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v == null ? "" : String(v)])),
+      );
   }, [data]);
 
   async function save() {
-    const { error } = await supabase.from("app_settings").update({
-      company_name: f["company_name"] || "Dealer ERP",
-      tagline: f["tagline"] || null, logo_url: f["logo_url"] || null, phone: f["phone"] || null,
-      address: f["address"] || null, invoice_footer: f["invoice_footer"] || null, updated_at: new Date().toISOString(),
-    }).eq("id", 1);
-    if (error) { toast.error(error.message); return; }
+    const logo = f["logo_url"]?.trim() ?? "";
+    if (logo && !/^https?:\/\//i.test(logo)) {
+      toast.error("Logo link must start with http:// or https://");
+      return;
+    }
+    const { error } = await supabase
+      .from("app_settings")
+      .update({
+        company_name: f["company_name"] || "Dealer ERP",
+        tagline: f["tagline"] || null,
+        logo_url: logo || null,
+        phone: f["phone"] || null,
+        address: f["address"] || null,
+        invoice_footer: f["invoice_footer"] || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", 1);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
     toast.success("Saved");
     qc.invalidateQueries({ queryKey: ["settings"] });
   }
@@ -55,13 +78,27 @@ function SettingsPage() {
         {fields.map(([k, l]) => (
           <div key={k} className="space-y-1">
             <Label>{l}</Label>
-            <Input disabled={!canEdit} value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
+            <Input
+              disabled={!canEdit}
+              value={f[k] ?? ""}
+              onChange={(e) => setF({ ...f, [k]: e.target.value })}
+            />
           </div>
         ))}
-        {<img src={logoSrc(f["logo_url"])} alt="Logo preview" className="h-16 w-auto rounded border object-contain p-1" />}
+        {
+          <img
+            src={logoSrc(f["logo_url"])}
+            alt="Logo preview"
+            className="h-16 w-auto rounded border object-contain p-1"
+          />
+        }
         <div className="space-y-1">
           <Label>Invoice / label footer</Label>
-          <Textarea disabled={!canEdit} value={f["invoice_footer"] ?? ""} onChange={(e) => setF({ ...f, invoice_footer: e.target.value })} />
+          <Textarea
+            disabled={!canEdit}
+            value={f["invoice_footer"] ?? ""}
+            onChange={(e) => setF({ ...f, invoice_footer: e.target.value })}
+          />
         </div>
         {canEdit && <Button onClick={save}>{t("Save")}</Button>}
       </Card>

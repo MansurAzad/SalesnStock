@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -55,6 +56,7 @@ const statusVariant: Record<string, string> = {
 function Inventory() {
   const { t } = useT();
   const { data: me } = useMe();
+  const qc = useQueryClient();
   const [branch, setBranch] = useState("");
   const [status, setStatus] = useState("in_stock");
   const [q, setQ] = useState("");
@@ -77,7 +79,9 @@ function Inventory() {
       !q || i.imei.includes(q) || productLabel(i.products).toLowerCase().includes(q.toLowerCase()),
   );
   const bname = (id: string) => branches.find((b) => b.id === id)?.name ?? "";
-  const canManageStock = !!me && (me.canWriteHq || me.roles.includes("branch_manager"));
+  const canManageStock = (itemBranch: string) =>
+    !!me && (me.canWriteHq || (me.roles.includes("branch_manager") && me.branch_id === itemBranch));
+  const canManageAny = !!me && (me.canWriteHq || me.roles.includes("branch_manager"));
 
   async function setDamageStatus(id: string, damaged: boolean) {
     const reason = window.prompt(
@@ -149,7 +153,7 @@ function Inventory() {
                   <TableHead>{t("Status")}</TableHead>
                   {me?.isHq && <TableHead className="text-right">Cost</TableHead>}
                   <TableHead className="text-right">{t("Price")}</TableHead>
-                  {canManageStock && <TableHead />}
+                  {canManageAny && <TableHead />}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -169,7 +173,7 @@ function Inventory() {
                     <TableCell className="text-right tabular">
                       {taka(i.products?.sale_price)}
                     </TableCell>
-                    {canManageStock && (
+                    {canManageStock(i.branch_id) && (
                       <TableCell className="text-right">
                         {i.status === "in_stock" ? (
                           <Button
@@ -214,6 +218,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
     kind: "phone",
     purchase_price: "",
     sale_price: "",
+    min_stock: "",
   });
   const [editing, setEditing] = useState<{
     id: string;
@@ -223,30 +228,82 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
     kind: string;
     purchase_price: string;
     sale_price: string;
+    min_stock: string;
   } | null>(null);
   async function add() {
+    const brand = f.brand.trim();
+    const model = f.model.trim();
+    if (!brand || !model) {
+      toast.error("Brand and model are required");
+      return;
+    }
+    const purchase_price = Number(f.purchase_price);
+    const sale_price = Number(f.sale_price);
+    if (!Number.isFinite(purchase_price) || purchase_price < 0) {
+      toast.error("Enter a valid purchase price");
+      return;
+    }
+    if (!Number.isFinite(sale_price) || sale_price < 0) {
+      toast.error("Enter a valid sale price");
+      return;
+    }
     const { error } = await supabase.from("products").insert({
       ...f,
-      purchase_price: Number(f.purchase_price),
-      sale_price: Number(f.sale_price),
+      brand,
+      model,
+      variant: f.variant.trim() || null,
+      purchase_price,
+      sale_price,
+      min_stock: Number(f.min_stock) || 0,
     });
     if (error) {
       toast.error(error.message);
       return;
     }
     toast.success("Product added");
-    setF({ brand: "", model: "", variant: "", kind: "phone", purchase_price: "", sale_price: "" });
+    setF({
+      brand: "",
+      model: "",
+      variant: "",
+      kind: "phone",
+      purchase_price: "",
+      sale_price: "",
+      min_stock: "",
+    });
     qc.invalidateQueries({ queryKey: ["products"] });
   }
   async function saveProduct() {
     if (!editing) return;
     const { id, ...fields } = editing;
+    const purchase_price = Number(fields.purchase_price);
+    const sale_price = Number(fields.sale_price);
+    const min_stock = Number(fields.min_stock) || 0;
+    if (!fields.brand.trim() || !fields.model.trim()) {
+      toast.error("Brand and model are required");
+      return;
+    }
+    if (!Number.isFinite(purchase_price) || purchase_price < 0) {
+      toast.error("Enter a valid purchase price");
+      return;
+    }
+    if (!Number.isFinite(sale_price) || sale_price < 0) {
+      toast.error("Enter a valid sale price");
+      return;
+    }
+    if (min_stock < 0) {
+      toast.error("Reorder level cannot be negative");
+      return;
+    }
     const { error } = await supabase
       .from("products")
       .update({
         ...fields,
-        purchase_price: Number(fields.purchase_price),
-        sale_price: Number(fields.sale_price),
+        brand: fields.brand.trim(),
+        model: fields.model.trim(),
+        variant: fields.variant.trim() || null,
+        purchase_price,
+        sale_price,
+        min_stock,
       })
       .eq("id", id);
     if (error) {
@@ -281,11 +338,17 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
     <div className="space-y-3">
       {canEdit && (
         <Card className="flex flex-wrap items-end gap-2 p-4">
-          {(["brand", "model", "variant", "purchase_price", "sale_price"] as const).map((k) => (
+          {(
+            ["brand", "model", "variant", "purchase_price", "sale_price", "min_stock"] as const
+          ).map((k) => (
             <div key={k} className="space-y-1">
-              <Label className="text-xs capitalize">{k.replace("_", " ")}</Label>
+              <Label className="text-xs capitalize">
+                {k === "min_stock" ? "Reorder at" : k.replace("_", " ")}
+              </Label>
               <Input
                 className="w-36"
+                type={k.includes("price") || k === "min_stock" ? "number" : "text"}
+                min={k.includes("price") || k === "min_stock" ? 0 : undefined}
                 value={f[k]}
                 onChange={(e) => setF({ ...f, [k]: e.target.value })}
               />
@@ -300,7 +363,17 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
               <SelectItem value="accessory">Accessory</SelectItem>
             </SelectContent>
           </Select>
-          <Button onClick={add} disabled={!f.brand || !f.model}>
+          <Button
+            onClick={add}
+            disabled={
+              !f.brand.trim() ||
+              !f.model.trim() ||
+              !Number.isFinite(Number(f.purchase_price)) ||
+              !Number.isFinite(Number(f.sale_price)) ||
+              Number(f.purchase_price) < 0 ||
+              Number(f.sale_price) < 0
+            }
+          >
             Add product
           </Button>
         </Card>
@@ -314,6 +387,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
               <TableHead>Type</TableHead>
               <TableHead className="text-right">Cost</TableHead>
               <TableHead className="text-right">MRP</TableHead>
+              <TableHead className="text-right">Reorder at</TableHead>
               {canEdit && <TableHead />}
             </TableRow>
           </TableHeader>
@@ -327,6 +401,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
                 <TableCell className="capitalize">{p.kind}</TableCell>
                 <TableCell className="text-right tabular">{taka(p.purchase_price)}</TableCell>
                 <TableCell className="text-right tabular">{taka(p.sale_price)}</TableCell>
+                <TableCell className="text-right tabular">{p.min_stock || "—"}</TableCell>
                 {canEdit && (
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
@@ -342,6 +417,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
                             kind: p.kind,
                             purchase_price: String(p.purchase_price),
                             sale_price: String(p.sale_price),
+                            min_stock: String(p.min_stock ?? 0),
                           })
                         }
                       >
@@ -372,26 +448,29 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit product</DialogTitle>
+            <DialogDescription>Update this product's model details and prices.</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
-            {(["brand", "model", "variant", "purchase_price", "sale_price"] as const).map(
-              (field) => (
-                <div key={field} className="space-y-1">
-                  <Label className="text-xs capitalize">{field.replace("_", " ")}</Label>
-                  <Input
-                    type={field.includes("price") ? "number" : "text"}
-                    min={field.includes("price") ? 0 : undefined}
-                    step={field.includes("price") ? "0.01" : undefined}
-                    value={editing?.[field] ?? ""}
-                    onChange={(e) =>
-                      setEditing((current) =>
-                        current ? { ...current, [field]: e.target.value } : current,
-                      )
-                    }
-                  />
-                </div>
-              ),
-            )}
+            {(
+              ["brand", "model", "variant", "purchase_price", "sale_price", "min_stock"] as const
+            ).map((field) => (
+              <div key={field} className="space-y-1">
+                <Label className="text-xs capitalize">
+                  {field === "min_stock" ? "Reorder at" : field.replace("_", " ")}
+                </Label>
+                <Input
+                  type={field.includes("price") || field === "min_stock" ? "number" : "text"}
+                  min={field.includes("price") || field === "min_stock" ? 0 : undefined}
+                  step={field.includes("price") ? "0.01" : undefined}
+                  value={editing?.[field] ?? ""}
+                  onChange={(e) =>
+                    setEditing((current) =>
+                      current ? { ...current, [field]: e.target.value } : current,
+                    )
+                  }
+                />
+              </div>
+            ))}
             <div className="space-y-1">
               <Label className="text-xs">Type</Label>
               <Select
@@ -447,31 +526,53 @@ function AddStock() {
   const [imeis, setImeis] = useState("");
   const [supplierId, setSupplierId] = useState("");
   const [invoice, setInvoice] = useState("");
+  const [cost, setCost] = useState("");
+  const [paid, setPaid] = useState("");
+  const [method, setMethod] = useState("cash");
+  const [note, setNote] = useState("");
   const product = products.find((p) => p.id === productId);
+  // Each line is "imei" or "imei,imeei2" — a phone with two IMEI codes is the
+  // normal case in this trade, so the second one must not be thrown away.
   const list = Array.from(
-    new Set(
+    new Map(
       imeis
-        .split(/[\s,]+/)
-        .map((s) => s.trim())
-        .filter(Boolean),
-    ),
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [a, b] = line.split(/[,|]/).map((s) => s.trim());
+          return { imei: a ?? "", imei2: b || null };
+        })
+        .map((row) => [row.imei, row] as const),
+    ).values(),
   );
-  const invalid = list.filter((x) => !isValidImei(x));
+  const invalid = list.filter((x) => !isValidImei(x.imei));
+  const unitCost = cost === "" ? Number(product?.purchase_price ?? 0) : Number(cost);
+  const totalCost = list.length * unitCost;
+  const paidAmount = Number(paid) || 0;
 
   async function save() {
     if (!product || !branchId || !supplierId) return;
+    if (!Number.isFinite(unitCost) || unitCost < 0) {
+      toast.error("Enter a valid purchase cost");
+      return;
+    }
+    if (paidAmount > totalCost) {
+      toast.error("Paid amount cannot be more than the total cost");
+      return;
+    }
     const { error } = await supabase.rpc("create_purchase", {
       _supplier: supplierId,
       _branch: branchId,
       _invoice: invoice,
-      _paid: 0,
-      _method: "cash",
-      _note: "Stock received from inventory page",
-      _items: list.map((imei) => ({
+      _paid: paidAmount,
+      _method: method,
+      _note: note.trim() || "Stock received from inventory page",
+      _items: list.map((row) => ({
         product_id: product.id,
-        imei,
-        imei2: null,
-        cost: Number(product.purchase_price),
+        imei: row.imei,
+        imei2: row.imei2,
+        cost: unitCost,
       })),
     });
     if (error) {
@@ -483,6 +584,8 @@ function AddStock() {
     toast.success(`${list.length} items added`);
     setImeis("");
     setInvoice("");
+    setPaid("");
+    setNote("");
     setOpen(false);
     qc.invalidateQueries();
   }
@@ -495,6 +598,9 @@ function AddStock() {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("Add stock")} (purchase)</DialogTitle>
+          <DialogDescription>
+            Enter one IMEI per line — the stock is booked in as a supplier purchase.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <Select value={productId} onValueChange={setProductId}>
@@ -509,38 +615,112 @@ function AddStock() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={branchId} onValueChange={setBranchId}>
-            <SelectTrigger>
-              <SelectValue placeholder={t("Branch")} />
-            </SelectTrigger>
-            <SelectContent>
-              {branches.map((b) => (
-                <SelectItem key={b.id} value={b.id}>
-                  {b.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={supplierId} onValueChange={setSupplierId}>
-            <SelectTrigger>
-              <SelectValue placeholder="Supplier" />
-            </SelectTrigger>
-            <SelectContent>
-              {suppliers.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="grid grid-cols-2 gap-2">
+            <Select value={branchId} onValueChange={setBranchId}>
+              <SelectTrigger>
+                <SelectValue placeholder={t("Branch")} />
+              </SelectTrigger>
+              <SelectContent>
+                {branches.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>
+                    {b.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={supplierId} onValueChange={setSupplierId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Supplier" />
+              </SelectTrigger>
+              <SelectContent>
+                {suppliers.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Input
             placeholder="Supplier invoice no. (optional)"
             value={invoice}
             onChange={(e) => setInvoice(e.target.value)}
           />
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor="stock-cost">
+                Cost per item
+              </Label>
+              <Input
+                id="stock-cost"
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder={String(product?.purchase_price ?? "")}
+                value={cost}
+                onChange={(e) => setCost(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor="stock-paid">
+                Amount paid now
+              </Label>
+              <Input
+                id="stock-paid"
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="0"
+                value={paid}
+                onChange={(e) => setPaid(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Payment method</Label>
+              <Select value={method} onValueChange={setMethod}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["cash", "bank", "bkash", "nagad", "cheque", "online"].map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs" htmlFor="stock-note">
+                Note
+              </Label>
+              <Input
+                id="stock-note"
+                placeholder="Optional note for this purchase"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
+          </div>
+          {product && (
+            <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs">
+              Total cost <span className="font-semibold">{taka(totalCost)}</span> for {list.length}{" "}
+              item{list.length === 1 ? "" : "s"}
+              {paidAmount > 0 && (
+                <>
+                  {" "}
+                  · due <span className="font-semibold">{taka(totalCost - paidAmount)}</span>
+                </>
+              )}
+            </div>
+          )}
           <div>
             <div className="flex items-center justify-between">
-              <Label className="text-xs">IMEI numbers (one per line, 15 digits)</Label>
+              <Label className="text-xs">
+                IMEI numbers (one per line, 15 digits — add IMEI2 after a comma)
+              </Label>
               <ScanButton
                 continuous
                 label="Scan"
@@ -550,6 +730,7 @@ function AddStock() {
             <Textarea
               rows={6}
               className="font-mono text-xs"
+              placeholder={"356938035643809\n356938035643817,356938035643825"}
               value={imeis}
               onChange={(e) => setImeis(e.target.value)}
             />

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type KeyboardEvent } from "react";
+import { Fragment, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PageHeader } from "@/components/BranchPicker";
@@ -10,11 +10,13 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScanButton } from "@/components/BarcodeScanner";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -55,7 +57,9 @@ function Transfers() {
       return fetchAllPages(
         supabase
           .from("stock_transfers")
-          .select("*, transfer_items(id)")
+          .select(
+            "*, transfer_items(id, item_id, inventory_items(imei, imei2, products(brand, model)))",
+          )
           .order("created_at", { ascending: false }),
       );
     },
@@ -139,37 +143,62 @@ function Transfers() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {shown.map((tr) => (
-              <TableRow key={tr.id}>
-                <TableCell className="font-mono text-xs">{tr.transfer_no}</TableCell>
-                <TableCell>{bname(tr.from_branch_id)}</TableCell>
-                <TableCell>{bname(tr.to_branch_id)}</TableCell>
-                <TableCell>{tr.transfer_items.length}</TableCell>
-                <TableCell>{new Date(tr.created_at).toLocaleDateString()}</TableCell>
-                <TableCell>
-                  <Badge
-                    variant="outline"
-                    className={
-                      tr.status === "received" ? "bg-success/15 text-success" : "bg-warning/20"
-                    }
-                  >
-                    {tr.status.replace("_", " ")}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  {tr.status === "in_transit" && canReceive(tr.to_branch_id) && (
-                    <Button size="sm" onClick={() => receive(tr.id)}>
-                      {t("Receive")}
-                    </Button>
+            {shown.map((tr) => {
+              const items = tr.transfer_items.map((ti) => ti.inventory_items).filter((i) => !!i);
+              return (
+                <Fragment key={tr.id}>
+                  <TableRow>
+                    <TableCell className="font-mono text-xs">{tr.transfer_no}</TableCell>
+                    <TableCell>{bname(tr.from_branch_id)}</TableCell>
+                    <TableCell>{bname(tr.to_branch_id)}</TableCell>
+                    <TableCell>{tr.transfer_items.length}</TableCell>
+                    <TableCell>{new Date(tr.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={
+                          tr.status === "received" ? "bg-success/15 text-success" : "bg-warning/20"
+                        }
+                      >
+                        {tr.status.replace("_", " ")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {tr.status === "in_transit" && canReceive(tr.to_branch_id) && (
+                        <Button size="sm" onClick={() => receive(tr.id)}>
+                          {t("Receive")}
+                        </Button>
+                      )}
+                      {tr.status === "in_transit" && canCancel(tr.from_branch_id) && (
+                        <Button size="sm" variant="outline" onClick={() => cancel(tr.id)}>
+                          Cancel
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  {(items.length > 0 || tr.note) && (
+                    <TableRow className="bg-muted/40">
+                      <TableCell colSpan={7} className="py-2 text-xs">
+                        {items.length > 0 && (
+                          <div>
+                            <span className="text-muted-foreground">Items: </span>
+                            {items.map((i, idx) => (
+                              <span key={i.imei}>
+                                {idx > 0 && ", "}
+                                <span className="font-mono">{i.imei}</span>
+                                {i.imei2 ? ` / ${i.imei2}` : ""}
+                                {i.products ? ` (${i.products.brand} ${i.products.model})` : ""}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {tr.note && <div className="text-muted-foreground">Note: {tr.note}</div>}
+                      </TableCell>
+                    </TableRow>
                   )}
-                  {tr.status === "in_transit" && canCancel(tr.from_branch_id) && (
-                    <Button size="sm" variant="outline" onClick={() => cancel(tr.id)}>
-                      Cancel
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
+                </Fragment>
+              );
+            })}
             {shown.length === 0 && (
               <TableRow>
                 <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
@@ -192,6 +221,7 @@ function NewTransfer() {
   const [open, setOpen] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [note, setNote] = useState("");
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Set<string>>(new Set());
   const fromOptions = me?.canWriteHq ? branches : branches.filter((b) => b.id === me?.branch_id);
@@ -203,7 +233,7 @@ function NewTransfer() {
       return fetchAllPages(
         supabase
           .from("inventory_items")
-          .select("id,imei,products(brand,model,variant)")
+          .select("id,imei,imei2,products(brand,model,variant)")
           .eq("branch_id", from)
           .eq("status", "in_stock"),
       );
@@ -211,11 +241,18 @@ function NewTransfer() {
   });
   const shown = items.filter(
     (i) =>
-      !q || i.imei.includes(q) || productLabel(i.products).toLowerCase().includes(q.toLowerCase()),
+      !q ||
+      i.imei.includes(q) ||
+      (i.imei2 ?? "").includes(q) ||
+      productLabel(i.products).toLowerCase().includes(q.toLowerCase()),
   );
 
+  const findByCode = (code: string) => {
+    const c = code.trim();
+    return items.find((i) => i.imei === c || i.imei2 === c);
+  };
   function pick(code: string) {
-    const hit = items.find((i) => i.imei === code.trim());
+    const hit = findByCode(code);
     if (hit) {
       setSel((s) => new Set(s).add(hit.id));
       setQ("");
@@ -224,9 +261,9 @@ function NewTransfer() {
   }
   function onScan(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter") return;
-    const hit = items.find((i) => i.imei === q.trim());
+    const hit = findByCode(q);
     if (hit) {
-      setSel(new Set(sel).add(hit.id));
+      setSel((s) => new Set(s).add(hit.id));
       setQ("");
     } else toast.error("IMEI not in stock at this branch");
   }
@@ -236,7 +273,7 @@ function NewTransfer() {
       _from: from,
       _to: to,
       _item_ids: [...sel],
-      _note: "",
+      _note: note.trim(),
     });
     if (error) {
       toast.error(error.message);
@@ -244,6 +281,10 @@ function NewTransfer() {
     }
     toast.success(`${sel.size} items sent`);
     setSel(new Set());
+    setQ("");
+    setNote("");
+    setFrom("");
+    setTo("");
     setOpen(false);
     qc.invalidateQueries({ queryKey: ["transfers"] });
     qc.invalidateQueries({ queryKey: ["inventory"] });
@@ -259,16 +300,22 @@ function NewTransfer() {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("New transfer")}</DialogTitle>
+          <DialogDescription>
+            Pick the source and destination showroom, then scan the IMEIs to send.
+          </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-2">
           <Select
             value={from}
             onValueChange={(v) => {
               setFrom(v);
+              // The destination must differ from the source — clear it so the
+              // database never rejects the transfer with "must differ".
+              setTo("");
               setSel(new Set());
             }}
           >
-            <SelectTrigger>
+            <SelectTrigger aria-label="Source branch">
               <SelectValue placeholder="From" />
             </SelectTrigger>
             <SelectContent>
@@ -280,7 +327,7 @@ function NewTransfer() {
             </SelectContent>
           </Select>
           <Select value={to} onValueChange={setTo}>
-            <SelectTrigger>
+            <SelectTrigger aria-label="Destination branch">
               <SelectValue placeholder="To" />
             </SelectTrigger>
             <SelectContent>
@@ -294,8 +341,20 @@ function NewTransfer() {
             </SelectContent>
           </Select>
         </div>
+        <div className="space-y-1">
+          <Label htmlFor="transfer-note" className="text-xs">
+            Note
+          </Label>
+          <Input
+            id="transfer-note"
+            placeholder="Reason or instructions for the receiving showroom (optional)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </div>
         <div className="flex gap-2">
           <Input
+            aria-label={t("Scan or type IMEI")}
             placeholder={t("Scan or type IMEI")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -312,9 +371,12 @@ function NewTransfer() {
               <Checkbox
                 checked={sel.has(i.id)}
                 onCheckedChange={(c) => {
-                  const n = new Set(sel);
-                  c ? n.add(i.id) : n.delete(i.id);
-                  setSel(n);
+                  setSel((prev) => {
+                    const n = new Set(prev);
+                    if (c) n.add(i.id);
+                    else n.delete(i.id);
+                    return n;
+                  });
                 }}
               />
               <span className="font-mono text-xs">{i.imei}</span>

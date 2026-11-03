@@ -20,6 +20,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { localDate, localDayEndIso, localDayStartIso } from "@/lib/date";
+import { downloadCsv } from "@/lib/csv";
+import { safeUrl } from "@/lib/url";
 
 export const Route = createFileRoute("/_authenticated/expenses")({
   head: () => ({
@@ -42,6 +45,27 @@ const CATS = [
   "Other",
 ];
 
+/** Sentinel option: pick it to type a category that is not one of the presets. */
+const CUSTOM_CAT = "Other…";
+
+/**
+ * expense_date is a `date` column, so the value is already YYYY-MM-DD and can be
+ * compared as text. If it ever comes back as a timestamp we fall back to the
+ * local day boundaries instead.
+ */
+function inDayRange(value: string, from: string, to: string) {
+  if (!from && !to) return true;
+  if (value.length <= 10) {
+    if (from && value < from) return false;
+    if (to && value > to) return false;
+    return true;
+  }
+  const at = new Date(value).getTime();
+  if (from && at < new Date(localDayStartIso(from)).getTime()) return false;
+  if (to && at > new Date(localDayEndIso(to)).getTime()) return false;
+  return true;
+}
+
 function Expenses() {
   const qc = useQueryClient();
   const { data: me } = useMe();
@@ -49,9 +73,12 @@ function Expenses() {
   const [branch, setBranch] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("any");
-  const today = new Date().toISOString().slice(0, 10);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const today = localDate();
   const [f, setF] = useState({
     category: CATS[0] ?? "Other",
+    customCategory: "",
     amount: "",
     date: today,
     method: "cash",
@@ -60,6 +87,21 @@ function Expenses() {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const limit = branches.find((b) => b.id === branch)?.expense_limit;
+  const amount = Number(f.amount);
+  const amountOk = Number.isFinite(amount) && amount > 0;
+  // What actually travels to the RPC as _category.
+  const categoryValue = (f.category === CUSTOM_CAT ? f.customCategory : f.category).trim();
+  const categoryOk = categoryValue.length > 0;
+  const isAdmin = !!me?.canWriteHq;
+  const isBranchManager = !!me && me.branch_id === branch && me.roles.includes("branch_manager");
+  // The database decides approval — we only warn.
+  const overLimit = limit != null && amountOk && amount > Number(limit);
+  const limitWarning =
+    !overLimit || isAdmin
+      ? null
+      : isBranchManager
+        ? `Above the branch limit of ${taka(limit)} — an admin must approve this`
+        : `Above the branch limit of ${taka(limit)} — a manager must approve this`;
   const canSubmit =
     !!me &&
     !!branch &&
@@ -67,7 +109,7 @@ function Expenses() {
     (me.canWriteHq ||
       (me.branch_id === branch &&
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
-  const { data = [] } = useQuery({
+  const { data = [], error } = useQuery({
     queryKey: ["expenses", branch],
     enabled: !!branch,
     queryFn: async () => {
@@ -77,9 +119,32 @@ function Expenses() {
     },
   });
 
+  function resetForm() {
+    setF((p) => ({
+      ...p,
+      amount: "",
+      note: "",
+      attachment: "",
+      customCategory: "",
+      date: localDate(),
+    }));
+  }
+
   async function submit() {
     if (!canSubmit) {
       toast.error("Choose a branch you are allowed to operate");
+      return;
+    }
+    if (!amountOk) {
+      toast.error("Enter an amount greater than zero");
+      return;
+    }
+    if (!categoryOk) {
+      toast.error("Enter a category name");
+      return;
+    }
+    if (f.attachment.trim() && !safeUrl(f.attachment)) {
+      toast.error("Receipt link must start with http:// or https://");
       return;
     }
     if (editingId) {
@@ -89,8 +154,8 @@ function Expenses() {
       }
       const { error } = await supabase.rpc("update_pending_expense", {
         _expense: editingId,
-        _category: f.category,
-        _amount: Number(f.amount),
+        _category: categoryValue,
+        _amount: amount,
         _date: f.date,
         _method: f.method,
         _note: f.note,
@@ -102,7 +167,7 @@ function Expenses() {
       }
       toast.success("Pending expense updated");
       setEditingId(null);
-      setF({ ...f, amount: "", note: "", attachment: "" });
+      resetForm();
       qc.invalidateQueries();
       return;
     }
@@ -111,17 +176,17 @@ function Expenses() {
         "expense",
         {
           branch,
-          category: f.category,
-          amount: Number(f.amount),
+          category: categoryValue,
+          amount: amount,
           date: f.date,
           method: f.method,
           note: f.note,
           attachment: f.attachment,
         },
-        `Expense ${f.category} ৳${f.amount}`,
+        `Expense ${categoryValue} ৳${amount}`,
       );
       toast.success("Offline — expense saved and will sync when internet returns");
-      setF({ ...f, amount: "", note: "", attachment: "" });
+      resetForm();
     };
     if (!navigator.onLine) {
       await offline();
@@ -129,8 +194,8 @@ function Expenses() {
     }
     const { data: st, error } = await supabase.rpc("submit_expense", {
       _branch: branch,
-      _category: f.category,
-      _amount: Number(f.amount),
+      _category: categoryValue,
+      _amount: amount,
       _date: f.date,
       _method: f.method,
       _note: f.note,
@@ -145,7 +210,7 @@ function Expenses() {
       return;
     }
     toast.success(st === "approved" ? "Expense recorded" : "Above limit — sent for admin approval");
-    setF({ ...f, amount: "", note: "", attachment: "" });
+    resetForm();
     qc.invalidateQueries();
   }
   async function decide(id: string, ok: boolean) {
@@ -159,23 +224,52 @@ function Expenses() {
   function editExpense(e: (typeof data)[number]) {
     setBranch(e.branch_id);
     setEditingId(e.id);
+    const isPreset = CATS.includes(e.category);
     setF({
-      category: e.category,
+      category: isPreset ? e.category : CUSTOM_CAT,
+      customCategory: isPreset ? "" : e.category,
       amount: String(e.amount),
-      date: e.expense_date,
+      date: e.expense_date.slice(0, 10),
       method: e.method,
       note: e.note ?? "",
       attachment: e.attachment_url ?? "",
     });
   }
-  const approved = data
-    .filter((e) => e.status === "approved")
-    .reduce((s, e) => s + Number(e.amount), 0);
+  const bname = (id: string) => branches.find((b) => b.id === id)?.name ?? "";
   const shown = data.filter(
     (e) =>
+      inDayRange(e.expense_date, from, to) &&
       (!search || `${e.category} ${e.note ?? ""}`.toLowerCase().includes(search.toLowerCase())) &&
       (statusFilter === "any" || e.status === statusFilter),
   );
+  // The total must describe the rows on screen, not the whole table.
+  const approved = shown
+    .filter((e) => e.status === "approved")
+    .reduce((s, e) => s + Number(e.amount), 0);
+  const filtersActive = !!(search || statusFilter !== "any" || from || to);
+  const rowCount = shown.length;
+  const rowWord = rowCount === 1 ? "row" : "rows";
+
+  function exportCsv() {
+    downloadCsv(
+      shown.map((e) => ({
+        Date: e.expense_date.slice(0, 10),
+        Branch: bname(e.branch_id),
+        Category: e.category,
+        Note: e.note ?? "",
+        Method: e.method,
+        Amount: Number(e.amount),
+        Status: e.status,
+      })),
+      `expenses-${from || "all"}-to-${to || "all"}.csv`,
+    );
+  }
+
+  const emptyMessage = error
+    ? "Could not load expenses — see the error above."
+    : data.length
+      ? "No expenses match these filters."
+      : "No expenses yet.";
 
   return (
     <div>
@@ -185,59 +279,111 @@ function Expenses() {
       {canSubmit && (
         <Card className="mb-4 grid gap-2 p-4 md:grid-cols-6">
           <div>
-            <Label className="text-xs">Category</Label>
+            <Label className="text-xs" htmlFor="exp-category">
+              Category
+            </Label>
             <select
+              id="exp-category"
               className="w-full rounded-md border bg-background px-2 py-2"
               value={f.category}
               onChange={(e) => setF({ ...f, category: e.target.value })}
             >
               {CATS.map((c) => (
-                <option key={c}>{c}</option>
+                <option key={c} value={c}>
+                  {c}
+                </option>
               ))}
+              <option value={CUSTOM_CAT}>{CUSTOM_CAT}</option>
             </select>
           </div>
+          {f.category === CUSTOM_CAT && (
+            <div className="md:col-span-2">
+              <Label className="text-xs" htmlFor="exp-category-custom">
+                Category name
+              </Label>
+              <Input
+                id="exp-category-custom"
+                list="exp-category-options"
+                value={f.customCategory}
+                onChange={(e) => setF({ ...f, customCategory: e.target.value })}
+                placeholder="e.g. Generator fuel"
+                aria-label="Custom expense category"
+                aria-invalid={f.customCategory.trim().length === 0}
+              />
+              {!f.customCategory.trim() && (
+                <p className="mt-1 text-xs text-destructive">Enter a category name to save.</p>
+              )}
+              <datalist id="exp-category-options">
+                {CATS.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+            </div>
+          )}
           <div>
-            <Label className="text-xs">Amount ৳</Label>
+            <Label className="text-xs" htmlFor="exp-amount">
+              Amount ৳
+            </Label>
             <Input
+              id="exp-amount"
               type="number"
+              min={0}
+              step="0.01"
               value={f.amount}
               onChange={(e) => setF({ ...f, amount: e.target.value })}
             />
           </div>
           <div>
-            <Label className="text-xs">Date</Label>
+            <Label className="text-xs" htmlFor="exp-date">
+              Date
+            </Label>
             <Input
+              id="exp-date"
               type="date"
               value={f.date}
               onChange={(e) => setF({ ...f, date: e.target.value })}
             />
           </div>
           <div>
-            <Label className="text-xs">Method</Label>
+            <Label className="text-xs" htmlFor="exp-method">
+              Method
+            </Label>
             <select
+              id="exp-method"
               className="w-full rounded-md border bg-background px-2 py-2"
               value={f.method}
               onChange={(e) => setF({ ...f, method: e.target.value })}
             >
               {["cash", "bank", "bkash", "nagad"].map((m) => (
-                <option key={m}>{m}</option>
+                <option key={m} value={m}>
+                  {m}
+                </option>
               ))}
             </select>
           </div>
           <div>
-            <Label className="text-xs">Note</Label>
-            <Input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
+            <Label className="text-xs" htmlFor="exp-note">
+              Note
+            </Label>
+            <Input
+              id="exp-note"
+              value={f.note}
+              onChange={(e) => setF({ ...f, note: e.target.value })}
+            />
           </div>
           <div>
-            <Label className="text-xs">Receipt link (optional)</Label>
+            <Label className="text-xs" htmlFor="exp-attachment">
+              Receipt link (optional)
+            </Label>
             <Input
+              id="exp-attachment"
               value={f.attachment}
               onChange={(e) => setF({ ...f, attachment: e.target.value })}
               placeholder="https://"
             />
           </div>
-          <div className="md:col-span-6 flex items-center gap-3">
-            <Button onClick={submit} disabled={!f.amount || Number(f.amount) <= 0 || !canSubmit}>
+          <div className="md:col-span-6 flex flex-wrap items-center gap-3">
+            <Button onClick={submit} disabled={!amountOk || !canSubmit || !categoryOk}>
               {editingId ? "Save changes" : "Add expense"}
             </Button>
             {editingId && (
@@ -245,11 +391,19 @@ function Expenses() {
                 variant="ghost"
                 onClick={() => {
                   setEditingId(null);
-                  setF({ ...f, amount: "", note: "", attachment: "" });
+                  resetForm();
                 }}
               >
                 Cancel edit
               </Button>
+            )}
+            {limitWarning && (
+              <span
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs font-semibold text-destructive"
+              >
+                {limitWarning}
+              </span>
             )}
             {limit != null && (
               <span className="text-xs text-muted-foreground">
@@ -259,27 +413,87 @@ function Expenses() {
           </div>
         </Card>
       )}
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Input
-          className="max-w-sm bg-card"
-          placeholder="Search category or note"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <select
-          className="rounded-md border bg-background px-3 py-2 text-sm"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-        >
-          <option value="any">All statuses</option>
-          <option value="pending">Pending</option>
-          <option value="approved">Approved</option>
-          <option value="rejected">Rejected</option>
-        </select>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground" htmlFor="exp-from">
+            From
+          </Label>
+          <Input
+            id="exp-from"
+            type="date"
+            className="w-40 bg-card"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground" htmlFor="exp-to">
+            To
+          </Label>
+          <Input
+            id="exp-to"
+            type="date"
+            className="w-40 bg-card"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </div>
+        {(from || to) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFrom("");
+              setTo("");
+            }}
+          >
+            All time
+          </Button>
+        )}
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground" htmlFor="exp-search">
+            Search
+          </Label>
+          <Input
+            id="exp-search"
+            className="w-64 bg-card"
+            placeholder="Search category or note"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground" htmlFor="exp-status">
+            Status
+          </Label>
+          <select
+            id="exp-status"
+            className="h-9 rounded-md border bg-background px-3 text-sm"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+          >
+            <option value="any">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
+        <Button variant="outline" size="sm" onClick={exportCsv} disabled={!rowCount}>
+          Export CSV
+        </Button>
       </div>
+      {error && (
+        <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          Could not load expenses: {error.message}
+        </p>
+      )}
       <Card>
-        <div className="p-4 text-sm">
-          Approved total: <b>{taka(approved)}</b>
+        <div className="flex flex-wrap items-baseline gap-2 p-4 text-sm">
+          <span className="text-muted-foreground">Approved total</span>
+          <b className="text-base tabular">{taka(approved)}</b>
+          <span className="text-xs text-muted-foreground">
+            {filtersActive ? `of ${rowCount} filtered ${rowWord}` : `of all ${rowCount} ${rowWord}`}
+          </span>
         </div>
         <Table>
           <TableHeader>
@@ -297,24 +511,24 @@ function Expenses() {
           <TableBody>
             {shown.map((e) => (
               <TableRow key={e.id}>
-                <TableCell>{e.expense_date}</TableCell>
-                <TableCell>{branches.find((b) => b.id === e.branch_id)?.name}</TableCell>
+                <TableCell>{e.expense_date.slice(0, 10)}</TableCell>
+                <TableCell>{bname(e.branch_id)}</TableCell>
                 <TableCell>{e.category}</TableCell>
                 <TableCell className="text-xs">
                   {e.note}
-                  {e.attachment_url && (
+                  {safeUrl(e.attachment_url) && (
                     <a
                       className="ml-1 text-primary"
-                      href={e.attachment_url}
+                      href={safeUrl(e.attachment_url) ?? undefined}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noreferrer noopener"
                     >
                       receipt
                     </a>
                   )}
                 </TableCell>
                 <TableCell>{e.method}</TableCell>
-                <TableCell className="text-right">{taka(e.amount)}</TableCell>
+                <TableCell className="text-right tabular">{taka(e.amount)}</TableCell>
                 <TableCell>
                   <Badge
                     variant={
@@ -352,7 +566,7 @@ function Expenses() {
             {shown.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
-                  {data.length ? "No expenses match these filters." : "No expenses yet."}
+                  {emptyMessage}
                 </TableCell>
               </TableRow>
             )}

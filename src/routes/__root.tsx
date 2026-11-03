@@ -16,6 +16,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { LangProvider } from "@/lib/i18n";
 import { supabase } from "@/integrations/supabase/client";
 import { registerOfflineShell } from "@/lib/sw-register";
+import { clearOutbox } from "@/lib/offline";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -87,9 +88,15 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { name: "theme-color", content: "#04605d" },
       { title: "Mobile Dealer ERP" },
-      { name: "description", content: "Multi-branch mobile retail ERP: IMEI stock, POS, installments and accounts." },
+      {
+        name: "description",
+        content: "Multi-branch mobile retail ERP: IMEI stock, POS, installments and accounts.",
+      },
       { property: "og:title", content: "Mobile Dealer ERP" },
-      { property: "og:description", content: "Multi-branch mobile retail ERP: IMEI stock, POS, installments and accounts." },
+      {
+        property: "og:description",
+        content: "Multi-branch mobile retail ERP: IMEI stock, POS, installments and accounts.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:site", content: "@Lovable" },
@@ -103,7 +110,16 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "apple-touch-icon", href: "/apple-touch-icon.png" },
       { rel: "manifest", href: "/manifest.webmanifest" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Sora:wght@500;600;700&display=swap",
+      },
+    ],
+    scripts: [
+      {
+        children:
+          "try{var l=localStorage.getItem('lang');if(l==='bn'||l==='en')document.documentElement.lang=l}catch(e){}",
+      },
     ],
   }),
   shellComponent: RootShell,
@@ -130,25 +146,41 @@ const persister = createAsyncStoragePersister({
   storage:
     typeof indexedDB === "undefined"
       ? { getItem: async () => null, setItem: async () => {}, removeItem: async () => {} }
-      : { getItem: (k: string) => idbGet(k), setItem: (k: string, v: string) => idbSet(k, v), removeItem: (k: string) => idbDel(k) },
+      : {
+          getItem: (k: string) => idbGet(k),
+          setItem: (k: string, v: string) => idbSet(k, v),
+          removeItem: (k: string) => idbDel(k),
+        },
   key: "erp-query-cache",
 });
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
-  useEffect(() => { void registerOfflineShell(); }, []);
+  useEffect(() => {
+    void registerOfflineShell();
+  }, []);
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
       router.invalidate();
-      if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
+      if (event === "SIGNED_OUT") {
+        // Never restore the previous user's cached data on this device.
+        queryClient.clear();
+        void idbDel("erp-query-cache");
+        void clearOutbox();
+        return;
+      }
+      queryClient.invalidateQueries();
     });
     return () => data.subscription.unsubscribe();
   }, [router, queryClient]);
 
   return (
-    <PersistQueryClientProvider client={queryClient} persistOptions={{ persister, maxAge: 1000 * 60 * 60 * 24 * 7, buster: "v1" }}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{ persister, maxAge: 1000 * 60 * 60 * 24 * 7, buster: "v2" }}
+    >
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <LangProvider>
         <Outlet />

@@ -22,7 +22,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { fetchAllPages } from "@/lib/paginated-query";
 
 export const Route = createFileRoute("/_authenticated/purchases")({
@@ -58,7 +64,7 @@ function Purchases() {
           <History branch={branch} />
         </TabsContent>
         <TabsContent value="suppliers">
-          <Suppliers />
+          <Suppliers branch={branch} />
         </TabsContent>
       </Tabs>
     </div>
@@ -84,6 +90,7 @@ function Receive({ branch }: { branch: string }) {
   const [invoice, setInvoice] = useState("");
   const [paid, setPaid] = useState("0");
   const [method, setMethod] = useState("cash");
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const canReceive =
     !!me &&
@@ -112,30 +119,58 @@ function Receive({ branch }: { branch: string }) {
       toast.error("Choose a branch you are allowed to purchase for");
       return;
     }
-    setBusy(true);
-    const { error } = await supabase.rpc("create_purchase", {
-      _supplier: supplier,
-      _branch: branch,
-      _invoice: invoice,
-      _paid: Number(paid || 0),
-      _method: method,
-      _note: "",
-      _items: lines.map((l) => ({
-        product_id: product,
-        imei: l.imei,
-        imei2: l.imei2,
-        cost: l.cost,
-      })),
-    });
-    setBusy(false);
-    if (error) {
-      toast.error(error.message);
+    if (!supplier || !product) {
+      toast.error("Choose a supplier and a product");
       return;
+    }
+    if (!lines.length) {
+      toast.error("Add at least one IMEI");
+      return;
+    }
+    if (bad.length) {
+      toast.error(`Invalid IMEI: ${bad.map((b) => b.imei).join(", ")}`);
+      return;
+    }
+    const paidNow = Number(paid || 0);
+    if (!Number.isFinite(paidNow) || paidNow < 0) {
+      toast.error("Paid amount must be zero or more");
+      return;
+    }
+    if (lines.some((l) => !Number.isFinite(l.cost) || l.cost < 0)) {
+      toast.error("Unit cost must be zero or more");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc("create_purchase", {
+        _supplier: supplier,
+        _branch: branch,
+        _invoice: invoice,
+        _paid: paidNow,
+        _method: method,
+        _note: note.trim(),
+        _items: lines.map((l) => ({
+          product_id: product,
+          imei: l.imei,
+          imei2: l.imei2,
+          cost: l.cost,
+        })),
+      });
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save the purchase");
+      return;
+    } finally {
+      setBusy(false);
     }
     toast.success(`${lines.length} items received`);
     setImeis("");
     setInvoice("");
     setPaid("0");
+    setNote("");
     qc.invalidateQueries();
   }
 
@@ -209,6 +244,15 @@ function Receive({ branch }: { branch: string }) {
               ))}
             </select>
           </div>
+          <div className="col-span-2">
+            <Label htmlFor="purchase-note">Note</Label>
+            <Input
+              id="purchase-note"
+              placeholder="Optional note about this purchase"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
         </div>
       </div>
       <div className="space-y-2">
@@ -268,7 +312,9 @@ function History({ branch }: { branch: string }) {
       return fetchAllPages(q);
     },
   });
-  const can = !!me && (me.canWriteHq || me.roles.includes("branch_manager"));
+  const canActOn = (p: { branch_id: string }) =>
+    !!me &&
+    (me.canWriteHq || (me.branch_id === p.branch_id && me.roles.includes("branch_manager")));
   const due = (p: { total: number; returned: number; paid: number }) =>
     Number(p.total) - Number(p.returned) - Number(p.paid);
   const totalDue = data.reduce((s, p) => s + due(p), 0);
@@ -287,9 +333,14 @@ function History({ branch }: { branch: string }) {
 
   async function pay() {
     if (!paying) return;
+    const amount = Number(paying.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter an amount greater than zero");
+      return;
+    }
     const { error } = await supabase.rpc("pay_supplier", {
       _purchase: paying.id,
-      _amount: Number(paying.amount),
+      _amount: amount,
       _method: payMethod,
     });
     if (error) {
@@ -341,7 +392,7 @@ function History({ branch }: { branch: string }) {
         <TableBody>
           {shown.map((p) => (
             <Fragment key={p.id}>
-              <TableRow key={p.id}>
+              <TableRow>
                 <TableCell>{new Date(p.created_at).toLocaleDateString()}</TableCell>
                 <TableCell>{p.suppliers?.name}</TableCell>
                 <TableCell className="font-mono text-xs">{p.supplier_invoice}</TableCell>
@@ -372,7 +423,7 @@ function History({ branch }: { branch: string }) {
                 </TableCell>
                 <TableCell>
                   <div className="flex gap-1">
-                    {can && due(p) > 0 && (
+                    {canActOn(p) && due(p) > 0 && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -401,7 +452,7 @@ function History({ branch }: { branch: string }) {
                     <TableCell>{it.returned ? "returned" : it.inventory_items?.status}</TableCell>
                     <TableCell className="text-right">{taka(it.cost)}</TableCell>
                     <TableCell colSpan={3}>
-                      {can && !it.returned && it.inventory_items?.status === "in_stock" && (
+                      {canActOn(p) && !it.returned && it.inventory_items?.status === "in_stock" && (
                         <Button
                           size="sm"
                           variant="ghost"
@@ -433,6 +484,7 @@ function History({ branch }: { branch: string }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Pay supplier</DialogTitle>
+            <DialogDescription>Record a payment against this purchase.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1">
@@ -470,14 +522,18 @@ function History({ branch }: { branch: string }) {
   );
 }
 
-function Suppliers() {
+function Suppliers({ branch }: { branch: string }) {
   const qc = useQueryClient();
   const { data: me } = useMe();
   const { data = [] } = useSuppliers();
   const { data: dues = [] } = useQuery({
-    queryKey: ["supplier-dues"],
-    queryFn: async () =>
-      fetchAllPages(supabase.from("purchases").select("supplier_id,total,returned,paid")),
+    queryKey: ["supplier-dues", branch],
+    enabled: !!branch,
+    queryFn: async () => {
+      let q = supabase.from("purchases").select("supplier_id,total,returned,paid");
+      if (branch !== "all") q = q.eq("branch_id", branch);
+      return fetchAllPages(q);
+    },
   });
   const [f, setF] = useState({ name: "", phone: "", address: "" });
   const [editing, setEditing] = useState<{
@@ -487,7 +543,13 @@ function Suppliers() {
     address: string;
   } | null>(null);
   async function add() {
-    const { error } = await supabase.from("suppliers").insert(f);
+    if (!f.name.trim()) {
+      toast.error("Enter a supplier name");
+      return;
+    }
+    const { error } = await supabase
+      .from("suppliers")
+      .insert({ name: f.name.trim(), phone: f.phone || null, address: f.address || null });
     if (error) {
       toast.error(error.message);
       return;
@@ -556,7 +618,7 @@ function Suppliers() {
             value={f.address}
             onChange={(e) => setF({ ...f, address: e.target.value })}
           />
-          <Button onClick={add} disabled={!f.name}>
+          <Button onClick={add} disabled={!f.name.trim()}>
             Add supplier
           </Button>
         </div>
@@ -608,6 +670,16 @@ function Suppliers() {
               )}
             </TableRow>
           ))}
+          {data.length === 0 && (
+            <TableRow>
+              <TableCell
+                colSpan={me?.canWriteHq ? 5 : 4}
+                className="py-8 text-center text-muted-foreground"
+              >
+                No suppliers yet.
+              </TableCell>
+            </TableRow>
+          )}
         </TableBody>
       </Table>
       <Dialog
@@ -619,6 +691,7 @@ function Suppliers() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit supplier</DialogTitle>
+            <DialogDescription>Update this supplier's contact details.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             {(["name", "phone", "address"] as const).map((field) => (

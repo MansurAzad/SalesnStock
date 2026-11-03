@@ -33,6 +33,8 @@ import { Route as AuthenticatedSyncRouteImport } from './routes/_authenticated/s
 import { Route as AuthenticatedTransfersRouteImport } from './routes/_authenticated/transfers'
 import { Route as AuthenticatedUsersRouteImport } from './routes/_authenticated/users'
 import { Route as ApiInsightsRouteImport } from './routes/api/insights'
+import { Route as AuthenticatedCustomersCustomerIdRouteImport } from './routes/_authenticated/customers_.$customerId'
+import { Route as AuthenticatedKistiReceiptInstallmentIdRouteImport } from './routes/_authenticated/kisti-receipt.$installmentId'
 import { Route as AuthenticatedPurchasePrintPurchaseIdRouteImport } from './routes/_authenticated/purchase-print.$purchaseId'
 import { Route as AuthenticatedReceiptSaleIdRouteImport } from './routes/_authenticated/receipt.$saleId'
 
@@ -156,6 +158,18 @@ const ApiInsightsRoute = ApiInsightsRouteImport.update({
   path: '/api/insights',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AuthenticatedCustomersCustomerIdRoute =
+  AuthenticatedCustomersCustomerIdRouteImport.update({
+    id: '/customers_/$customerId',
+    path: '/customers/$customerId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedKistiReceiptInstallmentIdRoute =
+  AuthenticatedKistiReceiptInstallmentIdRouteImport.update({
+    id: '/kisti-receipt/$installmentId',
+    path: '/kisti-receipt/$installmentId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedPurchasePrintPurchaseIdRoute =
   AuthenticatedPurchasePrintPurchaseIdRouteImport.update({
     id: '/purchase-print/$purchaseId',
@@ -193,6 +207,8 @@ export interface FileRoutesByFullPath {
   '/transfers': typeof AuthenticatedTransfersRoute
   '/users': typeof AuthenticatedUsersRoute
   '/api/insights': typeof ApiInsightsRoute
+  '/customers/$customerId': typeof AuthenticatedCustomersCustomerIdRoute
+  '/kisti-receipt/$installmentId': typeof AuthenticatedKistiReceiptInstallmentIdRoute
   '/purchase-print/$purchaseId': typeof AuthenticatedPurchasePrintPurchaseIdRoute
   '/receipt/$saleId': typeof AuthenticatedReceiptSaleIdRoute
 }
@@ -220,6 +236,8 @@ export interface FileRoutesByTo {
   '/transfers': typeof AuthenticatedTransfersRoute
   '/users': typeof AuthenticatedUsersRoute
   '/api/insights': typeof ApiInsightsRoute
+  '/customers/$customerId': typeof AuthenticatedCustomersCustomerIdRoute
+  '/kisti-receipt/$installmentId': typeof AuthenticatedKistiReceiptInstallmentIdRoute
   '/purchase-print/$purchaseId': typeof AuthenticatedPurchasePrintPurchaseIdRoute
   '/receipt/$saleId': typeof AuthenticatedReceiptSaleIdRoute
 }
@@ -249,6 +267,8 @@ export interface FileRoutesById {
   '/_authenticated/transfers': typeof AuthenticatedTransfersRoute
   '/_authenticated/users': typeof AuthenticatedUsersRoute
   '/api/insights': typeof ApiInsightsRoute
+  '/_authenticated/customers_/$customerId': typeof AuthenticatedCustomersCustomerIdRoute
+  '/_authenticated/kisti-receipt/$installmentId': typeof AuthenticatedKistiReceiptInstallmentIdRoute
   '/_authenticated/purchase-print/$purchaseId': typeof AuthenticatedPurchasePrintPurchaseIdRoute
   '/_authenticated/receipt/$saleId': typeof AuthenticatedReceiptSaleIdRoute
 }
@@ -278,6 +298,8 @@ export interface FileRouteTypes {
     | '/transfers'
     | '/users'
     | '/api/insights'
+    | '/customers/$customerId'
+    | '/kisti-receipt/$installmentId'
     | '/purchase-print/$purchaseId'
     | '/receipt/$saleId'
   fileRoutesByTo: FileRoutesByTo
@@ -305,6 +327,8 @@ export interface FileRouteTypes {
     | '/transfers'
     | '/users'
     | '/api/insights'
+    | '/customers/$customerId'
+    | '/kisti-receipt/$installmentId'
     | '/purchase-print/$purchaseId'
     | '/receipt/$saleId'
   id:
@@ -333,6 +357,8 @@ export interface FileRouteTypes {
     | '/_authenticated/transfers'
     | '/_authenticated/users'
     | '/api/insights'
+    | '/_authenticated/customers_/$customerId'
+    | '/_authenticated/kisti-receipt/$installmentId'
     | '/_authenticated/purchase-print/$purchaseId'
     | '/_authenticated/receipt/$saleId'
   fileRoutesById: FileRoutesById
@@ -514,6 +540,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiInsightsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_authenticated/customers_/$customerId': {
+      id: '/_authenticated/customers_/$customerId'
+      path: '/customers/$customerId'
+      fullPath: '/customers/$customerId'
+      preLoaderRoute: typeof AuthenticatedCustomersCustomerIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/kisti-receipt/$installmentId': {
+      id: '/_authenticated/kisti-receipt/$installmentId'
+      path: '/kisti-receipt/$installmentId'
+      fullPath: '/kisti-receipt/$installmentId'
+      preLoaderRoute: typeof AuthenticatedKistiReceiptInstallmentIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/purchase-print/$purchaseId': {
       id: '/_authenticated/purchase-print/$purchaseId'
       path: '/purchase-print/$purchaseId'
@@ -552,6 +592,8 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedSyncRoute: typeof AuthenticatedSyncRoute
   AuthenticatedTransfersRoute: typeof AuthenticatedTransfersRoute
   AuthenticatedUsersRoute: typeof AuthenticatedUsersRoute
+  AuthenticatedCustomersCustomerIdRoute: typeof AuthenticatedCustomersCustomerIdRoute
+  AuthenticatedKistiReceiptInstallmentIdRoute: typeof AuthenticatedKistiReceiptInstallmentIdRoute
   AuthenticatedPurchasePrintPurchaseIdRoute: typeof AuthenticatedPurchasePrintPurchaseIdRoute
   AuthenticatedReceiptSaleIdRoute: typeof AuthenticatedReceiptSaleIdRoute
 }
@@ -577,6 +619,9 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSyncRoute: AuthenticatedSyncRoute,
   AuthenticatedTransfersRoute: AuthenticatedTransfersRoute,
   AuthenticatedUsersRoute: AuthenticatedUsersRoute,
+  AuthenticatedCustomersCustomerIdRoute: AuthenticatedCustomersCustomerIdRoute,
+  AuthenticatedKistiReceiptInstallmentIdRoute:
+    AuthenticatedKistiReceiptInstallmentIdRoute,
   AuthenticatedPurchasePrintPurchaseIdRoute:
     AuthenticatedPurchasePrintPurchaseIdRoute,
   AuthenticatedReceiptSaleIdRoute: AuthenticatedReceiptSaleIdRoute,

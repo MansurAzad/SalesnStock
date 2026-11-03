@@ -8,6 +8,7 @@ import { roleLabel, useBranches, useMe } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -32,6 +33,13 @@ export const Route = createFileRoute("/_authenticated/users")({
 
 type Role = "super_admin" | "dealer_admin" | "branch_manager" | "sales" | "accountant" | "auditor";
 
+/** A pending role change, with the server values it was based on. */
+type Edit = { role: string; branch: string; base: string };
+
+type UserRow = { id: string; role: string; branch_id: string | null };
+
+const baseOf = (u: UserRow) => `${u.role}|${u.branch_id ?? "none"}`;
+
 function Users() {
   const { t } = useT();
   const { data: me } = useMe();
@@ -44,39 +52,71 @@ function Users() {
         fetchAllPages(supabase.from("profiles").select("*").order("created_at")),
         fetchAllPages(supabase.from("user_roles").select("*")),
       ]);
-      return profiles.map((x) => ({
-        ...x,
-        role: roleRows.find((y) => y.user_id === x.id)?.role ?? "",
-      }));
+      return profiles.map((x) => {
+        const roles = roleRows.filter((y) => y.user_id === x.id).map((y) => y.role as string);
+        return { ...x, roles, role: roles[0] ?? "" };
+      });
     },
   });
-  const [edits, setEdits] = useState<Record<string, { role: string; branch: string }>>({});
+  const [edits, setEdits] = useState<Record<string, Edit>>({});
   const [search, setSearch] = useState("");
   const shown = data.filter(
     (u) =>
       !search ||
-      `${u.full_name ?? ""} ${u.email ?? ""} ${roleLabel[u.role] ?? u.role} ${branches.find((b) => b.id === u.branch_id)?.name ?? ""}`
+      `${u.full_name ?? ""} ${u.email ?? ""} ${u.roles.map((r) => roleLabel[r] ?? r).join(" ")} ${branches.find((b) => b.id === u.branch_id)?.name ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
 
+  // A pending change is only valid while the server row still looks the way it
+  // did when the change was made. If the row moved on, the edit is dropped so
+  // nobody saves a role that was changed elsewhere.
+  const pendingEdit = (u: UserRow): Edit | null => {
+    const cur = edits[u.id];
+    if (!cur) return null;
+    if (cur.base !== baseOf(u)) return null;
+    if (cur.role === u.role && cur.branch === (u.branch_id ?? "none")) return null;
+    return cur;
+  };
+
   async function save(id: string) {
-    const row = data.find((d) => d.id === id)!;
-    const e = edits[id] ?? { role: row.role, branch: row.branch_id ?? "none" };
+    const row = data.find((d) => d.id === id);
+    if (!row) return;
+    const pending = pendingEdit(row);
+    const e = pending ?? { role: row.role, branch: row.branch_id ?? "none" };
     if (!e.role) {
       toast.error("Choose a role");
       return;
     }
+    // Showroom roles are locked to one branch by the database — catch it here
+    // so the admin gets a clear message instead of a raw constraint error.
+    if ((e.role === "sales" || e.role === "branch_manager") && e.branch === "none") {
+      toast.error("Sales and Branch Manager need a branch");
+      return;
+    }
+    const extra = row.roles.filter((r) => r !== e.role);
+    if (
+      extra.length &&
+      !window.confirm(
+        `${row.full_name ?? "This user"} also has ${extra.map((r) => roleLabel[r] ?? r).join(", ")}. Saving replaces all roles with ${roleLabel[e.role] ?? e.role}. Continue?`,
+      )
+    )
+      return;
     const { error } = await supabase.rpc("admin_set_user", {
       _user: id,
       _role: e.role as Role,
-      _branch: (e.branch === "none" ? null : e.branch) as string,
+      _branch: (e.branch === "none" ? null : e.branch) as string | null,
     });
     if (error) {
       toast.error(error.message);
       return;
     }
     toast.success("Saved");
+    setEdits((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     qc.invalidateQueries({ queryKey: ["users"] });
   }
 
@@ -114,6 +154,7 @@ function Users() {
       </p>
       <Input
         className="mb-3 max-w-sm bg-card"
+        aria-label="Search users"
         placeholder="Search name, email, role or branch"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
@@ -131,9 +172,18 @@ function Users() {
           </TableHeader>
           <TableBody>
             {shown.map((u) => {
-              const e = edits[u.id] ?? { role: u.role, branch: u.branch_id ?? "none" };
-              const set = (patch: Partial<typeof e>) =>
-                setEdits({ ...edits, [u.id]: { ...e, ...patch } });
+              const pending = pendingEdit(u);
+              const e = pending ?? { role: u.role, branch: u.branch_id ?? "none" };
+              const set = (patch: Partial<{ role: string; branch: string }>) =>
+                setEdits((current) => {
+                  const base = baseOf(u);
+                  const prev = current[u.id];
+                  const prevBase =
+                    prev && prev.base === base
+                      ? prev
+                      : { role: u.role, branch: u.branch_id ?? "none" };
+                  return { ...current, [u.id]: { ...prevBase, ...patch, base } };
+                });
               return (
                 <TableRow key={u.id}>
                   <TableCell className="font-medium">{u.full_name}</TableCell>
@@ -155,6 +205,18 @@ function Users() {
                         ))}
                       </SelectContent>
                     </Select>
+                    {u.roles.length > 1 && (
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        Also:{" "}
+                        {u.roles
+                          .slice(1)
+                          .map((r) => roleLabel[r] ?? r)
+                          .join(", ")}
+                      </div>
+                    )}
+                    {u.roles.length === 0 && (
+                      <div className="mt-1 text-xs text-muted-foreground">Access revoked</div>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Select
@@ -178,7 +240,7 @@ function Users() {
                   <TableCell>
                     {me?.canWriteHq && (
                       <div className="flex gap-2">
-                        <Button size="sm" onClick={() => save(u.id)}>
+                        <Button size="sm" disabled={!pending} onClick={() => save(u.id)}>
                           {t("Save")}
                         </Button>
                         {u.role && u.id !== me.id && (

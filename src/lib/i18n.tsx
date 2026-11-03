@@ -9,9 +9,12 @@ const dict: Record<string, string> = {
   "Offline sync": "অফলাইন সিঙ্ক",
   "waiting to sync": "সিঙ্কের অপেক্ষায়",
   "need attention": "দেখা দরকার",
-  "Offline — sales, kisti and expenses are saved on this device": "অফলাইন — বিক্রি, কিস্তি ও খরচ এই ডিভাইসে সংরক্ষিত হচ্ছে",
+  "Offline — sales, kisti and expenses are saved on this device":
+    "অফলাইন — বিক্রি, কিস্তি ও খরচ এই ডিভাইসে সংরক্ষিত হচ্ছে",
   Inventory: "স্টক",
   Transfers: "স্টক ট্রান্সফার",
+  Purchases: "ক্রয়",
+  Expenses: "খরচ",
   POS: "বিক্রয় (POS)",
   Sales: "বিক্রয় তালিকা",
   Customers: "কাস্টমার",
@@ -21,6 +24,7 @@ const dict: Record<string, string> = {
   Users: "ইউজার ও রোল",
   "Sign out": "লগআউট",
   "All branches": "সব শোরুম",
+  "No branch assigned": "কোনো শোরুম নির্ধারিত নেই",
   "Today's sales": "আজকের বিক্রয়",
   "Month sales": "এই মাসের বিক্রয়",
   "In stock": "স্টকে আছে",
@@ -60,10 +64,13 @@ const dict: Record<string, string> = {
   "Scan or type IMEI": "IMEI স্ক্যান বা টাইপ করুন",
   Products: "পণ্য তালিকা",
   Reports: "রিপোর্ট",
+  "AI insights": "এআই বিশ্লেষণ",
+  "Audit log": "অডিট লগ",
   Finance: "ফাইন্যান্স পার্টনার",
   Employees: "কর্মচারী ও হাজিরা",
   Labels: "বারকোড লেবেল",
   Settings: "সেটিংস",
+  "Income category": "আয়ের খাত",
 };
 
 const Ctx = createContext<{ lang: Lang; setLang: (l: Lang) => void; t: (s: string) => string }>({
@@ -78,9 +85,13 @@ export function LangProvider({ children }: { children: ReactNode }) {
     const v = localStorage.getItem("lang");
     if (v === "bn" || v === "en") setLangState(v);
   }, []);
+  useEffect(() => {
+    document.documentElement.lang = lang === "bn" ? "bn" : "en";
+  }, [lang]);
   const setLang = (l: Lang) => {
     setLangState(l);
     localStorage.setItem("lang", l);
+    document.documentElement.lang = l === "bn" ? "bn" : "en";
   };
   const t = (s: string) => (lang === "bn" ? (dict[s] ?? s) : s);
   return <Ctx.Provider value={{ lang, setLang, t }}>{children}</Ctx.Provider>;

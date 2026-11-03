@@ -22,13 +22,20 @@ import { X } from "lucide-react";
 import { ScanButton } from "@/components/BarcodeScanner";
 import { extractImei } from "@/lib/imei";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 
 export const Route = createFileRoute("/_authenticated/pos")({
   head: () => ({ meta: [{ title: "POS — Dealer ERP" }] }),
   component: POS,
 });
 
-type CartLine = { item_id: string; imei: string; label: string; price: number };
+type CartLine = {
+  item_id: string;
+  imei: string;
+  label: string;
+  price: number;
+  list_price: number;
+};
 
 function POS() {
   const { t } = useT();
@@ -73,23 +80,38 @@ function POS() {
   const soldOffline = offlineSoldIds(box.ops);
   const stock = allStock.filter((i) => !soldOffline.has(i.id));
 
+  const debouncedPhone = useDebouncedValue(phone, 400);
   const { data: existing } = useQuery({
-    queryKey: ["customer-phone", branch, phone],
-    enabled: !!branch && phone.length >= 11,
+    queryKey: ["customer-phone", branch, debouncedPhone],
+    enabled: !!branch && debouncedPhone.length === 11,
     queryFn: async () => {
+      // customers.phone is not unique, so take the first match instead of
+      // maybeSingle() which errors out when duplicates exist.
       const { data } = await supabase
         .from("customers")
         .select("id,name,phone")
         .eq("branch_id", branch)
-        .eq("phone", phone)
-        .maybeSingle();
-      return data;
+        .eq("phone", debouncedPhone)
+        .order("created_at", { ascending: true })
+        .limit(1);
+      return data?.[0] ?? null;
     },
   });
 
+  const num = (v: string) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
   const subtotal = cart.reduce((a, c) => a + c.price, 0);
-  const total = Math.max(0, subtotal - Number(discount || 0));
-  const financed = total - Number(down || 0);
+  const listSubtotal = cart.reduce((a, c) => a + c.list_price, 0);
+  const discountAmount = Math.min(Math.max(num(discount), 0), subtotal);
+  const total = Math.max(0, subtotal - discountAmount);
+  // The server measures the discount against the catalogue price, so an edited line price
+  // counts as a discount too and needs a reason.
+  const effectiveDiscount = Math.max(listSubtotal - total, 0);
+  const needsReason = discountAmount > 0 || effectiveDiscount > 0;
+  const downPayment = Math.min(Math.max(num(down), 0), total);
+  const financed = total - downPayment;
   const monthly = saleType === "installment" && Number(months) > 0 ? financed / Number(months) : 0;
 
   function add(imei: string) {
@@ -113,6 +135,7 @@ function POS() {
               imei: it.imei,
               label: productLabel(it.products),
               price: Number(it.products?.sale_price ?? 0),
+              list_price: Number(it.products?.sale_price ?? 0),
             },
           ],
     );
@@ -130,12 +153,12 @@ function POS() {
         cust_name: custName,
         nid,
         items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
-        discount: Number(discount || 0),
-        paid: saleType === "cash" ? total : Number(down || 0),
+        discount: discountAmount,
+        paid: saleType === "cash" ? total : downPayment,
         method,
         sale_type: saleType,
         months: saleType === "installment" ? Number(months) : "",
-        discount_reason: reason,
+        discount_reason: reason.trim(),
       },
       `Sale ${taka(total)} · ${cart.length} pcs${phone ? " · " + phone : ""}`,
     );
@@ -158,10 +181,21 @@ function POS() {
       }
       let customerId: string | null = existing?.id ?? null;
       if (!customerId && phone) {
-        if (!custName) throw new Error("Customer name is required");
+        // Re-check server-side: the debounced lookup may not have resolved yet.
+        const { data: dup } = await supabase
+          .from("customers")
+          .select("id")
+          .eq("branch_id", branch)
+          .eq("phone", phone)
+          .order("created_at", { ascending: true })
+          .limit(1);
+        customerId = dup?.[0]?.id ?? null;
+      }
+      if (!customerId && phone) {
+        if (!custName.trim()) throw new Error("Customer name is required");
         const { data, error } = await supabase
           .from("customers")
-          .insert({ branch_id: branch, name: custName, phone, nid: nid || null })
+          .insert({ branch_id: branch, name: custName.trim(), phone, nid: nid || null })
           .select("id")
           .single();
         if (error) throw error;
@@ -171,12 +205,12 @@ function POS() {
         _branch: branch,
         _customer: customerId as string,
         _items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
-        _discount: Number(discount || 0),
-        _paid: saleType === "cash" ? total : Number(down || 0),
+        _discount: discountAmount,
+        _paid: saleType === "cash" ? total : downPayment,
         _method: method,
         _sale_type: saleType,
         _months: saleType === "installment" ? Number(months) : (null as unknown as number),
-        _discount_reason: reason,
+        _discount_reason: reason.trim(),
       });
       if (error) throw error;
       toast.success("Sale completed");
@@ -246,18 +280,23 @@ function POS() {
                 </div>
                 <Input
                   type="number"
+                  min={0}
+                  aria-label={`Price for ${c.label}`}
                   className="w-32 text-right"
                   value={c.price}
                   onChange={(e) =>
-                    setCart(
-                      cart.map((x, j) => (j === i ? { ...x, price: Number(e.target.value) } : x)),
+                    setCart((prev) =>
+                      prev.map((x, j) =>
+                        j === i ? { ...x, price: Math.max(0, Number(e.target.value) || 0) } : x,
+                      ),
                     )
                   }
                 />
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => setCart(cart.filter((_, j) => j !== i))}
+                  aria-label={`Remove ${c.label} from cart`}
+                  onClick={() => setCart((prev) => prev.filter((_, j) => j !== i))}
                 >
                   <X className="h-4 w-4" />
                 </Button>
@@ -275,6 +314,7 @@ function POS() {
               <button
                 key={s}
                 onClick={() => setSaleType(s)}
+                aria-pressed={saleType === s}
                 className={`rounded py-1.5 text-sm font-medium ${saleType === s ? "bg-card shadow-sm" : "text-muted-foreground"}`}
               >
                 {t(s === "cash" ? "Cash" : "Installment")}
@@ -287,9 +327,15 @@ function POS() {
             </Label>
             <Input
               placeholder={t("Phone") + " 01XXXXXXXXX"}
+              inputMode="numeric"
+              maxLength={11}
               value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))}
+              onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))}
+              aria-invalid={phone.length > 0 && !/^01\d{9}$/.test(phone)}
             />
+            {phone.length > 0 && !/^01\d{9}$/.test(phone) && (
+              <p className="text-xs text-destructive">Phone must be 11 digits starting with 01.</p>
+            )}
             {existing ? (
               <div className="rounded-md bg-success/10 px-3 py-2 text-sm">
                 {existing.name} · existing customer
@@ -309,13 +355,24 @@ function POS() {
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <Label className="text-xs">{t("Discount")}</Label>
-              <Input type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+              <Label className="text-xs" htmlFor="pos-discount">
+                {t("Discount")}
+              </Label>
+              <Input
+                id="pos-discount"
+                type="number"
+                min={0}
+                value={discount}
+                onChange={(e) => setDiscount(e.target.value)}
+              />
             </div>
-            {Number(discount) > 0 && (
+            {needsReason && (
               <div className="col-span-full">
-                <Label className="text-xs">Discount reason</Label>
+                <Label className="text-xs" htmlFor="pos-reason">
+                  Discount reason
+                </Label>
                 <Input
+                  id="pos-reason"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
                   placeholder="e.g. Eid campaign, loyal customer"
@@ -323,9 +380,11 @@ function POS() {
               </div>
             )}
             <div>
-              <Label className="text-xs">Method</Label>
+              <Label className="text-xs" htmlFor="pos-method">
+                Method
+              </Label>
               <Select value={method} onValueChange={setMethod}>
-                <SelectTrigger>
+                <SelectTrigger id="pos-method">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -341,12 +400,23 @@ function POS() {
           {saleType === "installment" && (
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <Label className="text-xs">Down payment</Label>
-                <Input type="number" value={down} onChange={(e) => setDown(e.target.value)} />
+                <Label className="text-xs" htmlFor="pos-down">
+                  Down payment
+                </Label>
+                <Input
+                  id="pos-down"
+                  type="number"
+                  min={0}
+                  value={down}
+                  onChange={(e) => setDown(e.target.value)}
+                />
               </div>
               <div>
-                <Label className="text-xs">Months</Label>
+                <Label className="text-xs" htmlFor="pos-months">
+                  Months
+                </Label>
                 <Input
+                  id="pos-months"
                   type="number"
                   min={1}
                   max={36}
@@ -357,8 +427,11 @@ function POS() {
             </div>
           )}
           <div className="space-y-1 border-t pt-3 text-sm tabular">
-            <Row l="Subtotal" v={taka(subtotal)} />
-            <Row l={t("Discount")} v={"− " + taka(discount)} />
+            <Row l="Subtotal" v={taka(listSubtotal)} />
+            {effectiveDiscount > discountAmount && (
+              <Row l="Price adjustment" v={"− " + taka(effectiveDiscount - discountAmount)} />
+            )}
+            <Row l={t("Discount")} v={"− " + taka(discountAmount)} />
             <Row l={t("Total")} v={taka(total)} big />
             {saleType === "installment" && (
               <Row l={`${months} × monthly`} v={taka(monthly.toFixed(2))} />
@@ -371,11 +444,17 @@ function POS() {
               busy ||
               cart.length === 0 ||
               !canSell ||
-              (saleType === "installment" && (!phone || financed <= 0))
+              (needsReason && !reason.trim()) ||
+              (saleType === "installment" &&
+                (!/^01\d{9}$/.test(phone) ||
+                  financed <= 0 ||
+                  Number(months) < 1 ||
+                  Number(months) > 36 ||
+                  (!existing && !custName.trim())))
             }
             onClick={checkout}
           >
-            {t("Checkout")} · {taka(saleType === "cash" ? total : down)}
+            {t("Checkout")} · {taka(saleType === "cash" ? total : downPayment)}
           </Button>
         </Card>
       </div>

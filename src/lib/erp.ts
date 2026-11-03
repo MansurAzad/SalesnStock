@@ -21,9 +21,10 @@ export type Me = {
 export function useMe() {
   return useQuery({
     queryKey: ["me"],
-    queryFn: async (): Promise<Me> => {
-      const { data: u } = await supabase.auth.getUser();
-      const id = u.user!.id;
+    queryFn: async (): Promise<Me | null> => {
+      const { data: u, error } = await supabase.auth.getUser();
+      if (error || !u.user) return null;
+      const id = u.user.id;
       const [{ data: p }, { data: r }] = await Promise.all([
         supabase.from("profiles").select("*").eq("id", id).maybeSingle(),
         supabase.from("user_roles").select("role").eq("user_id", id),
@@ -31,7 +32,7 @@ export function useMe() {
       const roles = (r ?? []).map((x) => x.role as string);
       return {
         id,
-        email: p?.email ?? u.user!.email ?? null,
+        email: p?.email ?? u.user.email ?? null,
         full_name: p?.full_name ?? null,
         branch_id: p?.branch_id ?? null,
         roles,
@@ -39,6 +40,8 @@ export function useMe() {
         canWriteHq: roles.some((x) => HQ_WRITE.includes(x)),
       };
     },
+    staleTime: 60_000,
+    retry: false,
   });
 }
 
@@ -46,7 +49,13 @@ export function useBranches() {
   return useQuery({
     queryKey: ["branches"],
     queryFn: async () => {
-      return fetchAllPages(supabase.from("branches").select("*").order("is_dealer_house", { ascending: false }).order("name"));
+      return fetchAllPages(
+        supabase
+          .from("branches")
+          .select("*")
+          .order("is_dealer_house", { ascending: false })
+          .order("name"),
+      );
     },
   });
 }
@@ -60,8 +69,9 @@ export function useProducts() {
   });
 }
 
-export const productLabel = (p?: { brand: string; model: string; variant: string | null } | null) =>
-  p ? `${p.brand} ${p.model}${p.variant ? " " + p.variant : ""}` : "—";
+export const productLabel = (
+  p?: { brand: string; model: string; variant: string | null } | null,
+) => (p ? `${p.brand} ${p.model}${p.variant ? " " + p.variant : ""}` : "—");
 
 export const roleLabel: Record<string, string> = {
   super_admin: "Super Admin",
@@ -76,7 +86,11 @@ export function useSettings() {
   return useQuery({
     queryKey: ["settings"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("app_settings").select("*").eq("id", 1).maybeSingle();
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("*")
+        .eq("id", 1)
+        .maybeSingle();
       if (error) throw error;
       return data;
     },

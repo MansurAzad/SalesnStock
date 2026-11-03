@@ -5,9 +5,15 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Mobile Dealer ERP" },
-      { name: "description", content: "Multi-branch mobile retail ERP for showrooms and dealer house." },
+      {
+        name: "description",
+        content: "Multi-branch mobile retail ERP for showrooms and dealer house.",
+      },
       { property: "og:title", content: "Mobile Dealer ERP" },
-      { property: "og:description", content: "Multi-branch mobile retail ERP for showrooms and dealer house." },
+      {
+        property: "og:description",
+        content: "Multi-branch mobile retail ERP for showrooms and dealer house.",
+      },
     ],
   }),
   beforeLoad: () => {

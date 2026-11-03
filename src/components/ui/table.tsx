@@ -11,22 +11,28 @@ const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableE
       if (!el) return;
       // Copy column headings onto each cell so phones can show rows as labelled cards.
       const label = () => {
-        const heads = Array.from(el.querySelectorAll("thead tr:last-child th")).map((th) => th.textContent?.trim() ?? "");
+        const heads = Array.from(el.querySelectorAll("thead tr:last-child th")).map(
+          (th) => th.textContent?.trim() ?? "",
+        );
         el.querySelectorAll("tbody tr").forEach((tr) => {
           Array.from(tr.children).forEach((td, i) => {
-            const l = (td as HTMLElement).hasAttribute("colspan") ? "" : heads[i] ?? "";
+            const l = (td as HTMLElement).hasAttribute("colspan") ? "" : (heads[i] ?? "");
             if (td.getAttribute("data-label") !== l) td.setAttribute("data-label", l);
           });
         });
       };
       label();
       const mo = new MutationObserver(label);
-      mo.observe(el, { childList: true, subtree: true });
+      mo.observe(el, { childList: true, subtree: true, characterData: true });
       return () => mo.disconnect();
     }, []);
     return (
       <div className="relative w-full overflow-auto">
-        <table ref={inner} className={cn("card-table w-full caption-bottom text-sm", className)} {...props} />
+        <table
+          ref={inner}
+          className={cn("card-table w-full caption-bottom text-sm", className)}
+          {...props}
+        />
       </div>
     );
   },

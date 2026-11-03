@@ -6,6 +6,10 @@ import { cn } from "@/lib/utils";
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const;
 
+/** The chart config is injected into a <style> tag, so only plain colour
+ *  values may pass — anything else could break out of the declaration. */
+const safeCssToken = (value: string) => /^[a-zA-Z0-9#(),.%/ _-]+$/.test(value);
+
 export type ChartConfig = {
   [k in string]: {
     label?: React.ReactNode;
@@ -40,7 +44,8 @@ const ChartContainer = React.forwardRef<
   }
 >(({ id, className, children, config, ...props }, ref) => {
   const uniqueId = React.useId();
-  const chartId = `chart-${id || uniqueId.replace(/:/g, "")}`;
+  // The id lands in a CSS selector, so keep it to characters that are safe there.
+  const chartId = `chart-${(id || uniqueId.replace(/:/g, "")).replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
   return (
     <ChartContext.Provider value={{ config }}>
@@ -78,7 +83,7 @@ ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
     const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null;
+    return color && safeCssToken(key) && safeCssToken(color) ? `  --color-${key}: ${color};` : null;
   })
   .join("\n")}
 }
@@ -170,7 +175,7 @@ const ChartTooltipContent = React.forwardRef<
             .map((item, index) => {
               const key = `${nameKey || item.name || item.dataKey || "value"}`;
               const itemConfig = getPayloadConfigFromPayload(config, item, key);
-              const indicatorColor = color || item.payload.fill || item.color;
+              const indicatorColor = color || item.payload?.fill || item.color;
 
               return (
                 <div

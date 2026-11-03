@@ -22,6 +22,12 @@ dist-ssr
 .wrangler/
 .dev.vars
 
+# Supabase CLI scratch files
+supabase/.temp/
+
+# The canonical lockfile is bun.lock; package-lock.json is a local npm artifact
+package-lock.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

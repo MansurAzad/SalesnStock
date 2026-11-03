@@ -39,9 +39,10 @@ function Sales() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("any");
   const [statusFilter, setStatusFilter] = useState("any");
+  const [period, setPeriod] = useState("30");
   const { data: branches = [] } = useBranches();
-  const { data = [] } = useQuery({
-    queryKey: ["sales", branch],
+  const { data = [], error } = useQuery({
+    queryKey: ["sales", branch, period],
     enabled: !!branch,
     queryFn: async () => {
       let q = supabase
@@ -51,18 +52,26 @@ function Sales() {
         )
         .order("created_at", { ascending: false });
       if (branch !== "all") q = q.eq("branch_id", branch);
+      if (period !== "all") {
+        const days = Number(period);
+        if (Number.isFinite(days) && days > 0) {
+          q = q.gte("created_at", new Date(Date.now() - days * 86400000).toISOString());
+        }
+      }
       return fetchAllPages(q);
     },
   });
   const { data: me } = useMe();
   const qc = useQueryClient();
-  const canReturn = !!me && (me.canWriteHq || me.roles.includes("branch_manager"));
+  const canReturn = (s: { branch_id: string }) =>
+    !!me &&
+    (me.canWriteHq || (me.branch_id === s.branch_id && me.roles.includes("branch_manager")));
   async function doReturn(id: string, inv: string) {
     const reason = window.prompt(
       `Return sale ${inv}? Stock goes back and a refund is recorded. Reason:`,
     );
-    if (!reason) return;
-    const { error } = await supabase.rpc("return_sale", { _sale: id, _reason: reason });
+    if (!reason?.trim()) return;
+    const { error } = await supabase.rpc("return_sale", { _sale: id, _reason: reason.trim() });
     if (error) {
       toast.error(error.message);
       return;
@@ -121,7 +130,26 @@ function Sales() {
             <SelectItem value="returned">Returned</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={period} onValueChange={setPeriod}>
+          <SelectTrigger className="w-40 bg-card">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7">Last 7 days</SelectItem>
+            <SelectItem value="30">Last 30 days</SelectItem>
+            <SelectItem value="90">Last 90 days</SelectItem>
+            <SelectItem value="all">All time</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
+      {error && (
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          Could not load sales: {error.message}
+        </p>
+      )}
       <Card>
         <Table>
           <TableHeader>
@@ -144,7 +172,24 @@ function Sales() {
                 <TableCell>{new Date(s.created_at).toLocaleString()}</TableCell>
                 <TableCell>{bname(s.branch_id)}</TableCell>
                 <TableCell>
-                  {s.customers ? `${s.customers.name} · ${s.customers.phone}` : "Walk-in"}
+                  {s.customers && s.customer_id ? (
+                    <>
+                      <Link
+                        to="/customers/$customerId"
+                        params={{ customerId: s.customer_id }}
+                        className="text-primary hover:underline"
+                      >
+                        {s.customers.name}
+                      </Link>{" "}
+                      <span className="tabular">{s.customers.phone}</span>
+                    </>
+                  ) : s.customers ? (
+                    <>
+                      {s.customers.name} <span className="tabular">{s.customers.phone}</span>
+                    </>
+                  ) : (
+                    "Walk-in"
+                  )}
                 </TableCell>
                 <TableCell className="text-xs">
                   {s.sale_items.map((i, k) => (
@@ -181,7 +226,7 @@ function Sales() {
                   >
                     <Printer className="h-4 w-4" /> Print
                   </Link>
-                  {canReturn && s.status !== "returned" && (
+                  {canReturn(s) && s.status !== "returned" && (
                     <button
                       className="ml-3 text-sm text-destructive"
                       onClick={() => doReturn(s.id, s.invoice_no)}
@@ -195,7 +240,11 @@ function Sales() {
             {shown.length === 0 && (
               <TableRow>
                 <TableCell colSpan={9} className="py-8 text-center text-muted-foreground">
-                  {data.length ? "No sales match these filters." : "No sales yet."}
+                  {error
+                    ? "Could not load sales."
+                    : data.length
+                      ? "No sales match these filters."
+                      : "No sales yet."}
                 </TableCell>
               </TableRow>
             )}

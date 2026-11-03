@@ -1,6 +1,6 @@
 @import "tailwindcss" source(none);
-@source "../src";
 @import "tw-animate-css";
+@source "../src";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -85,6 +85,44 @@
   --sidebar-ring: oklch(0.82 0.14 75);
 }
 
+/* Dark palette — applied when the <html> element carries the "dark" class. */
+.dark {
+  --background: oklch(0.19 0.02 210);
+  --foreground: oklch(0.95 0.01 190);
+  --card: oklch(0.23 0.02 210);
+  --card-foreground: oklch(0.95 0.01 190);
+  --popover: oklch(0.23 0.02 210);
+  --popover-foreground: oklch(0.95 0.01 190);
+  --primary: oklch(0.72 0.11 190);
+  --primary-foreground: oklch(0.16 0.02 210);
+  --secondary: oklch(0.28 0.02 210);
+  --secondary-foreground: oklch(0.95 0.01 190);
+  --muted: oklch(0.27 0.02 210);
+  --muted-foreground: oklch(0.7 0.02 200);
+  --accent: oklch(0.72 0.13 75);
+  --accent-foreground: oklch(0.16 0.03 60);
+  --destructive: oklch(0.65 0.19 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --success: oklch(0.7 0.14 150);
+  --warning: oklch(0.8 0.14 70);
+  --border: oklch(0.32 0.02 210);
+  --input: oklch(0.32 0.02 210);
+  --ring: oklch(0.72 0.11 190);
+  --chart-1: oklch(0.72 0.11 190);
+  --chart-2: oklch(0.8 0.14 75);
+  --chart-3: oklch(0.7 0.14 150);
+  --chart-4: oklch(0.68 0.15 30);
+  --chart-5: oklch(0.66 0.09 250);
+  --sidebar: oklch(0.22 0.03 210);
+  --sidebar-foreground: oklch(0.92 0.01 190);
+  --sidebar-primary: oklch(0.8 0.14 75);
+  --sidebar-primary-foreground: oklch(0.16 0.03 60);
+  --sidebar-accent: oklch(0.3 0.03 210);
+  --sidebar-accent-foreground: oklch(0.98 0.01 190);
+  --sidebar-border: oklch(0.33 0.03 210);
+  --sidebar-ring: oklch(0.8 0.14 75);
+}
+
 @layer base {
   * { border-color: var(--color-border); }
   body {
@@ -104,7 +142,8 @@
   main { padding: 0 !important; overflow: visible !important; }
 }
 
-/* Phones: every table becomes a stack of labelled cards */
+/* Phones: every table becomes a stack of labelled cards, and nothing may push
+   the page wider than the screen. */
 @media screen and (max-width: 767px) {
   .card-table thead { display: none; }
   .card-table, .card-table tbody { display: block; width: 100%; }
@@ -142,18 +181,13 @@
   }
   .card-table tbody td[colspan] { justify-content: center; text-align: center !important; }
   .card-table tbody td:empty, .card-table tbody td[data-label=""]:empty { display: none; }
-}
 
-/* Small phones: nothing may push the page wider than the screen */
-@media screen and (max-width: 639px) {
-  main { overflow-x: hidden; }
+  main { overflow-x: auto; }
   main [role="tablist"] { display: flex; flex-wrap: wrap; height: auto; max-width: 100%; justify-content: flex-start; }
   main [role="tablist"] > * { flex: 1 1 auto; }
   main button, main a { white-space: normal; height: auto; min-height: 2.25rem; text-align: center; }
   main input, main select, main textarea, main [role="combobox"] { max-width: 100%; min-width: 0; }
   main img, main canvas, main video, main svg:not([class*="h-"]) { max-width: 100%; height: auto; }
-}
-@media screen and (max-width: 639px) {
   main .flex:not(.flex-col):not(.flex-nowrap) { flex-wrap: wrap; }
   main .flex > * { min-width: 0; max-width: 100%; }
   main [class*="w-"]:not(.w-full):not([class*="h-"]) { max-width: 100%; }
