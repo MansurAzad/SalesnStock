@@ -15,6 +15,9 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "db:check": "node scripts/check-db.cjs",
+    "db:migrate": "node scripts/apply-to-db.cjs",
+    "db:smoke": "node scripts/db-smoke-test.cjs",
     "desktop": "electron ."
   },
   "overrides": {

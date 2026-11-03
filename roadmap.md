@@ -10,5 +10,6 @@
 - [x] Sale return / cancellation (no deletes), audit log viewer
 - [x] Printed purchase receipts (PUR-000001 numbers, branding)
 - [x] Finance partner ledger + pay/receive from Accounts into cash balance
-- [ ] Load real branches & stock, live test purchase/expense/return as Super Admin — waiting on real data from user
+- [x] Database end-to-end smoke test (68 checks): sales, installments, transfers, returns, expenses, purchases, finance, payroll, offline sync, roles, RLS and the reports
+- [ ] Load real branches & stock, live test purchase/expense/return as Super Admin — 4 branches and 20 stock items are loaded, waiting on the first real purchase
 - [x] Windows desktop app with offline POS, kisti, expenses and stock views + auto sync

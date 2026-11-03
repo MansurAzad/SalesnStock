@@ -63,3 +63,22 @@ Note: the AI insights page needs the Lovable AI Gateway key, which is
 provisioned only on Lovable hosting. On Vercel it responds
 "AI is not configured" unless a compatible gateway key is provided in
 `LOVABLE_API_KEY`.
+
+## ডেটাবেস
+
+ডেটাবেস সরাসরি Supabase Postgres-এ থাকে, তাই `drizzle-kit` এখানে কাজ করে না।
+মাইগ্রেশনগুলো `drizzle/migrations/` ফোল্ডারে আছে এবং এগুলো প্রয়োগ করতে হয়
+DB_URL সেট করে:
+
+```sh
+export DB_URL="postgres://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres"
+npm run db:migrate   # সব মাইগ্রেশন ক্রমানুসারে প্রয়োগ করে
+npm run db:check     # টেবিল, কলাম, ফাংশন ও RLS যাচাই করে
+npm run db:smoke     # এন্ড-টু-এন্ড টেস্ট (৬৮টি চেক)
+```
+
+`npm run db:smoke` একটি মাত্র ট্রানজ্যাকশনের ভেতরে সব দৃশ্য চালায় এবং শেষে
+সেটি রোলব্যাক করে — লাইভ ডেটা অক্ষত থাকে। টেস্টটি ব্যবহারকারীদের `SET ROLE
+authenticated` ও নকল JWT দিয়ে সিমুলেট করে, তাই RLS ও পারমিশন চেক ব্রাউজারের
+মতোই কাজ করে। বিকল হলে এটি সমস্যার লাইন নম্বর দেখায়।
+
