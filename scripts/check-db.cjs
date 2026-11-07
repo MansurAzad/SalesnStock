@@ -88,6 +88,37 @@ const HEADS = [
   "Other",
 ];
 
+const VALIDATED_CHECKS = [
+  ["finance_cases", "chk_finance_cases_amount"],
+  ["finance_cases", "chk_finance_cases_commission"],
+  ["finance_partners", "chk_finance_partners_comm"],
+  ["purchases", "chk_purchases_total"],
+  ["purchases", "chk_purchases_returned"],
+  ["purchases", "chk_purchases_paid"],
+  ["purchase_items", "chk_purchase_items_cost"],
+  ["branches", "chk_branches_max_discount"],
+  ["branches", "chk_branches_expense_limit"],
+  ["products", "chk_products_prices"],
+  ["sales", "chk_sales_amounts"],
+  ["installment_plans", "chk_installment_plans"],
+  ["installments", "chk_installments"],
+  ["employees", "chk_employees_salary"],
+];
+
+const INTERNAL_FUNCTIONS = [
+  "set_offline_replay",
+  "clear_offline_replay",
+  "inventory_movement_context",
+  "take_inventory_movement_context",
+];
+
+const MANAGED_TABLES = [
+  ["branches", "read branches"],
+  ["products", "read products"],
+  ["finance_partners", "read partners"],
+  ["inventory_items", "read items"],
+];
+
 const EXPECTED_FUNCTIONS = [
   "create_sale",
   "create_transfer",
@@ -134,6 +165,14 @@ const EXPECTED_FUNCTIONS = [
   "clear_offline_replay",
   "apply_offline_timestamp",
   "apply_offline_actor",
+  "audit_branch_change",
+  "create_purchase",
+  "pay_supplier",
+  "return_purchase_item",
+  "cancel_transfer",
+  "update_pending_expense",
+  "update_pending_finance_case",
+  "cancel_pending_finance_case",
 ];
 
 (async () => {
@@ -162,15 +201,42 @@ const EXPECTED_FUNCTIONS = [
   }
 
   const fns = await sql`
-    select p.proname from pg_proc p
+    select p.proname, p.oid::regprocedure::text as signature,
+           p.prorettype = 'trigger'::regtype as is_trigger,
+           exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                   where a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_exec,
+           has_function_privilege('anon', p.oid, 'EXECUTE') as anon_exec,
+           has_function_privilege('authenticated', p.oid, 'EXECUTE') as auth_exec
+    from pg_proc p
     join pg_namespace n on n.oid=p.pronamespace
-    where n.nspname='public'`;
+    where n.nspname='public' and p.prokind = 'f'`;
   const fnSet = new Set(fns.map((r) => r.proname));
   const missingFn = EXPECTED_FUNCTIONS.filter((f) => !fnSet.has(f));
   console.log(`functions: ${fnSet.size} present`);
   if (missingFn.length) {
     bad++;
     console.log("  MISSING FUNCTIONS: " + missingFn.join(", "));
+  }
+
+  const permissionIssues = [];
+  for (const fn of fns) {
+    if (fn.public_exec) permissionIssues.push(`PUBLIC can execute ${fn.signature}`);
+    if (fn.anon_exec) permissionIssues.push(`anon can execute ${fn.signature}`);
+    const internal = fn.is_trigger || INTERNAL_FUNCTIONS.includes(fn.proname);
+    if (internal && fn.auth_exec) {
+      permissionIssues.push(`authenticated can execute internal ${fn.signature}`);
+    } else if (!internal && EXPECTED_FUNCTIONS.includes(fn.proname) && !fn.auth_exec) {
+      permissionIssues.push(`authenticated cannot execute ${fn.signature}`);
+    }
+  }
+  const triggerFunctions = fns.filter((fn) => fn.is_trigger);
+  if (triggerFunctions.length !== 7) {
+    permissionIssues.push(`expected 7 trigger functions, found ${triggerFunctions.length}`);
+  }
+  console.log(`function permissions: ${permissionIssues.length} problem(s)`);
+  if (permissionIssues.length) {
+    bad++;
+    for (const issue of permissionIssues) console.log(`  ${issue}`);
   }
 
   // apply_offline_op reads as the owner of the queue, so RLS never narrows its
@@ -200,6 +266,109 @@ const EXPECTED_FUNCTIONS = [
       (noRls.length ? " -> " + noRls.map((r) => r.relname).join(", ") : ""),
   );
 
+  if (noRls.length) bad++;
+
+  const policies = await sql`
+    select tablename, policyname, permissive, roles, cmd, qual, with_check
+    from pg_policies where schemaname = 'public'`;
+  const policyIssues = [];
+  const uidSelect = /\(\s*SELECT\s+auth\.uid\(\)\s*(?:AS\s+\w+)?\s*\)/gi;
+  const normalized = (expr) =>
+    (expr ?? "")
+      .replace(uidSelect, "auth.uid()")
+      .replace(
+        /\(\s*SELECT\s+(?:public\.)?can_write_hq\(auth\.uid\(\)\)\s*(?:AS\s+\w+)?\s*\)/gi,
+        "can_write_hq(auth.uid())",
+      )
+      .replace(/public\.|[\s()]/g, "")
+      .toLowerCase();
+  for (const [table, readPolicy] of MANAGED_TABLES) {
+    const rows = policies.filter((p) => p.tablename === table);
+    if (rows.length !== 4 || rows.some((p) => p.cmd === "ALL")) {
+      policyIssues.push(`${table}: expected SELECT plus separate INSERT/UPDATE/DELETE policies`);
+    }
+    for (const cmd of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
+      const matches = rows.filter((p) => p.cmd === cmd);
+      const p = matches[0];
+      if (
+        matches.length !== 1 ||
+        p.permissive !== "PERMISSIVE" ||
+        p.roles.length !== 1 ||
+        p.roles[0] !== "authenticated"
+      ) {
+        policyIssues.push(`${table}: ${cmd} policy missing, duplicated or changed roles`);
+        continue;
+      }
+      const hq = "can_write_hqauth.uid";
+      const read = table === "inventory_items" ? "can_access_branchauth.uid,branch_id" : "true";
+      const using = cmd === "INSERT" ? "" : cmd === "SELECT" ? read : hq;
+      const check = cmd === "INSERT" || cmd === "UPDATE" ? hq : "";
+      if (
+        normalized(p.qual) !== using ||
+        normalized(p.with_check) !== check ||
+        (cmd === "SELECT" && p.policyname !== readPolicy)
+      ) {
+        policyIssues.push(`${table}: ${cmd} expressions changed`);
+      }
+    }
+  }
+  for (const p of policies) {
+    for (const expr of [p.qual, p.with_check]) {
+      if (!expr) continue;
+      if (/auth\.uid\(\)/i.test(expr.replace(uidSelect, ""))) {
+        policyIssues.push(`${p.tablename}.${p.policyname}: auth.uid() lacks scalar SELECT`);
+      }
+      if (/\bSELECT\s+(?:public\.)?can_(?:access|operate|approve)_branch\s*\(/i.test(expr)) {
+        policyIssues.push(`${p.tablename}.${p.policyname}: branch predicate moved into SELECT`);
+      }
+    }
+  }
+  const duplicateReads = await sql`
+    select c.relname, r.rolname, count(*)::int as n
+    from pg_policy p
+    join pg_class c on c.oid = p.polrelid
+    join pg_namespace ns on ns.oid = c.relnamespace
+    cross join pg_roles r
+    where ns.nspname = 'public' and p.polpermissive and p.polcmd in ('r', '*')
+      and r.rolname in ('anon', 'authenticated')
+      and (0 = any(p.polroles) or exists (
+        select 1 from unnest(p.polroles) pr(role_oid)
+        where pg_has_role(r.oid, nullif(pr.role_oid, 0), 'USAGE')))
+    group by c.relname, r.rolname having count(*) > 1`;
+  for (const p of duplicateReads) {
+    policyIssues.push(`${p.relname}: ${p.n} permissive SELECT policies for ${p.rolname}`);
+  }
+  console.log(`RLS policies: ${policyIssues.length} problem(s)`);
+  if (policyIssues.length) {
+    bad++;
+    for (const issue of policyIssues) console.log(`  ${issue}`);
+  }
+
+  const grants = await sql`
+    select c.relname, v.privilege,
+           has_table_privilege('authenticated', c.oid, v.privilege) as allowed,
+           case when v.privilege in ('INSERT', 'UPDATE')
+             then has_any_column_privilege('authenticated', c.oid, v.privilege)
+             else false
+           end as column_write
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+    cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) v(privilege)
+    where n.nspname = 'public'
+      and c.relname = any(${MANAGED_TABLES.map(([table]) => table)}::text[])`;
+  const changedGrants = grants.filter((g) => {
+    const expected = g.relname !== "inventory_items" || ["SELECT", "DELETE"].includes(g.privilege);
+    return g.allowed !== expected || (!expected && g.column_write);
+  });
+  console.log(`managed table grants: ${changedGrants.length} changed; ${grants.length}/16 checked`);
+  if (changedGrants.length || grants.length !== 16) {
+    bad++;
+    for (const g of changedGrants) {
+      console.log(
+        `  ${g.relname}: ${g.privilege} = ${g.allowed}, column write = ${g.column_write}`,
+      );
+    }
+  }
+
   const trig = await sql`
     select t.tgname from pg_trigger t
     join pg_class c on c.oid=t.tgrelid
@@ -225,9 +394,25 @@ const EXPECTED_FUNCTIONS = [
   }
 
   const constraints = await sql`
-    select conname, pg_get_constraintdef(oid) as def from pg_constraint
-    where connamespace = 'public'::regnamespace and contype = 'c'`;
+    select c.conname, c.convalidated, t.relname as table_name,
+           pg_get_constraintdef(c.oid) as def
+    from pg_constraint c left join pg_class t on t.oid = c.conrelid
+    where c.connamespace = 'public'::regnamespace and c.contype = 'c'`;
   const defs = new Map(constraints.map((r) => [r.conname, r.def]));
+  const unvalidated = constraints.filter((c) => !c.convalidated);
+  const missingChecks = VALIDATED_CHECKS.filter(([table, name]) => {
+    const matches = constraints.filter((c) => c.table_name === table && c.conname === name);
+    return matches.length !== 1 || !matches[0].convalidated;
+  });
+  console.log(
+    `validated money checks: ${14 - missingChecks.length}/14; unvalidated public checks: ${unvalidated.length}`,
+  );
+  if (missingChecks.length || unvalidated.length) {
+    bad++;
+    for (const [table, name] of missingChecks)
+      console.log(`  MISSING OR UNVALIDATED ${table}.${name}`);
+    for (const c of unvalidated) console.log(`  UNVALIDATED ${c.table_name}.${c.conname}`);
+  }
 
   const badMethods = [];
   for (const name of METHOD_CHECKS) {
@@ -253,6 +438,25 @@ const EXPECTED_FUNCTIONS = [
     bad++;
     console.log("  MISSING HEADS: " + badHeads.join(", "));
   }
+
+  const [expenseIndexes] = await sql`
+    select to_regclass('public.idx_expenses_branch_date') is null as duplicate_dropped,
+           exists (
+             select 1 from pg_index i
+             join pg_class c on c.oid = i.indexrelid
+             join pg_am am on am.oid = c.relam
+             where i.indexrelid = to_regclass('public.idx_expenses_date')
+               and i.indrelid = 'public.expenses'::regclass
+               and i.indisvalid and i.indisready and not i.indisunique
+               and i.indnatts = 2 and i.indnkeyatts = 2
+               and i.indpred is null and i.indexprs is null and am.amname = 'btree'
+               and pg_get_indexdef(i.indexrelid, 1, true) = 'branch_id'
+               and pg_get_indexdef(i.indexrelid, 2, true) = 'expense_date'
+           ) as equivalent_retained`;
+  console.log(
+    `expense indexes: duplicate dropped = ${expenseIndexes.duplicate_dropped}, equivalent retained = ${expenseIndexes.equivalent_retained}`,
+  );
+  if (!expenseIndexes.duplicate_dropped || !expenseIndexes.equivalent_retained) bad++;
 
   const counts = await sql`
     select (select count(*) from branches) as branches,

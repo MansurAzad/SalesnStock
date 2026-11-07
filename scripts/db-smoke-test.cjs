@@ -101,6 +101,23 @@ async function expectError(tx, label, fnName, args, expected) {
   return msg;
 }
 
+async function expectStatementError(tx, label, fn, code, constraint) {
+  const sp = `smoke_error_${(savepointSeq += 1)}`;
+  let error;
+  await tx.unsafe(`savepoint ${sp}`);
+  try {
+    await fn();
+  } catch (err) {
+    error = err;
+  } finally {
+    await tx.unsafe(`rollback to savepoint ${sp}`);
+    await tx.unsafe(`release savepoint ${sp}`);
+  }
+  assert(error, `${label} — the statement was expected to fail but succeeded`);
+  eq(error.code, code, `${label}: SQLSTATE (${error.message})`);
+  if (constraint) eq(error.constraint_name, constraint, `${label}: constraint`);
+}
+
 async function seed(tx) {
   // The test is the only admin team it knows about, so the roles that already
   // exist on the live database are cleared for the duration of the run. The
@@ -206,7 +223,7 @@ async function runAll(tx) {
   await tx`set local idle_in_transaction_session_timeout = '60s'`;
   await tx`
     create function pg_temp.smoke_try(p_fn text, p_args jsonb) returns text
-    language plpgsql as $$
+    language plpgsql security invoker as $$
     declare
       types text[];
       cats  text[];
@@ -234,18 +251,24 @@ async function runAll(tx) {
          and (select count(*) from unnest(p.proargtypes)) = jsonb_array_length(p_args)
        group by p.oid;
 
-      if types is null then return 'NO FUNCTION ' || p_fn; end if;
-
-      select array_agg(
-        case when cats[i] = 'A'
-             then format('ARRAY[%s]::%s',
-                  (select string_agg(format('%L::%s', e.val #>> '{}', elems[i]), ', ')
-                     from jsonb_array_elements(vals[i]::jsonb) as e(val)),
-                  types[i])
-             else format('%L::%s', vals[i], types[i])
-        end order by i)
-        into parts
-        from generate_series(1, array_length(types, 1)) as g(i);
+      if types is null then
+        if jsonb_array_length(p_args) <> 0 or not exists (
+          select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname = 'public' and p.proname = p_fn and p.pronargs = 0
+        ) then return 'NO FUNCTION ' || p_fn; end if;
+        parts := ARRAY[]::text[];
+      else
+        select array_agg(
+          case when cats[i] = 'A'
+               then format('ARRAY[%s]::%s',
+                    (select string_agg(format('%L::%s', e.val #>> '{}', elems[i]), ', ')
+                       from jsonb_array_elements(vals[i]::jsonb) as e(val)),
+                    types[i])
+               else format('%L::%s', vals[i], types[i])
+          end order by i)
+          into parts
+          from generate_series(1, array_length(types, 1)) as g(i);
+      end if;
 
       stmt := format('select public.%I(%s)', p_fn, array_to_string(parts, ', '));
       begin
@@ -255,12 +278,149 @@ async function runAll(tx) {
         return sqlerrm;
       end;
     end $$`;
+  await tx`grant execute on function pg_temp.smoke_try(text, jsonb) to authenticated, anon`;
 
   const ctx = await seed(tx);
   const { brA, brB, prod, prodLow, custA, custDue, custB, supplier, partner, staff, mintItem } =
     ctx;
 
   const cart = (itemId, price = 12000) => JSON.stringify([{ item_id: itemId, price }]);
+
+  await step("the error helper runs with the caller's permissions", async () => {
+    const [helper] = await tx`
+      select prosecdef from pg_proc where oid = 'pg_temp.smoke_try(text,jsonb)'::regprocedure`;
+    eq(helper.prosecdef, false, "smoke_try must be SECURITY INVOKER");
+  });
+
+  for (const [name, args] of [
+    ["set_offline_replay", ["2026-01-01T00:00:00Z", U.salesA]],
+    ["clear_offline_replay", []],
+    ["inventory_movement_context", ["adjustment", "forged reason", "SMK-FORGED"]],
+    ["take_inventory_movement_context", []],
+  ]) {
+    await step(`authenticated cannot invoke ${name} directly`, async () => {
+      await as(tx, U.salesA);
+      await expectError(tx, name, name, args, `permission denied for function ${name}`);
+    });
+  }
+
+  await step("anonymous callers cannot execute business RPCs", async () => {
+    await tx`select set_config('request.jwt.claims', '{"role":"anon"}', true)`;
+    await tx`set local role anon`;
+    try {
+      for (const [name, args] of [
+        ["create_sale", [brA.id, custA.id, [], 0, 0, "cash", "cash", null, null]],
+        ["admin_set_user", [U.helper, "sales", brA.id]],
+        ["stock_on_hand", [brA.id]],
+        ["apply_offline_op", [U.helper, "sale", {}, "2026-01-01T00:00:00Z", "smoke-anon", null]],
+      ]) {
+        await expectError(tx, name, name, args, `permission denied for function ${name}`);
+      }
+    } finally {
+      await asDb(tx);
+    }
+  });
+
+  for (const [table, values, edit] of [
+    ["branches", { name: "Smoke CRUD Branch", code: "SMK-CRUD" }, { name: "Smoke Edited Branch" }],
+    ["products", { brand: "Smoke CRUD", model: "Original" }, { model: "Edited" }],
+    ["finance_partners", { name: "Smoke CRUD Partner" }, { name: "Smoke Edited Partner" }],
+  ]) {
+    await step(`head office can manage ${table} while branch sales can only read`, async () => {
+      await as(tx, U.super);
+      const [row] = await tx`insert into ${tx(`public.${table}`)} ${tx(values)} returning id`;
+      assert(row?.id, `${table}: HQ insert returned no row`);
+      await as(tx, U.salesA);
+      const read = await tx`select id from ${tx(`public.${table}`)} where id = ${row.id}`;
+      eq(read.length, 1, `${table}: branch SELECT remains allowed`);
+      const deniedValues = table === "branches" ? { ...values, code: "SMK-DENIED" } : values;
+      await expectStatementError(
+        tx,
+        `${table}: branch insert`,
+        () => tx`insert into ${tx(`public.${table}`)} ${tx(deniedValues)}`,
+        "42501",
+      );
+      const updated = await tx`
+        update ${tx(`public.${table}`)} set ${tx(edit)} where id = ${row.id} returning id`;
+      eq(updated.length, 0, `${table}: branch UPDATE must affect no rows`);
+      const deleted =
+        await tx`delete from ${tx(`public.${table}`)} where id = ${row.id} returning id`;
+      eq(deleted.length, 0, `${table}: branch DELETE must affect no rows`);
+      await as(tx, U.super);
+      const hqUpdate = await tx`
+        update ${tx(`public.${table}`)} set ${tx(edit)} where id = ${row.id} returning *`;
+      eq(hqUpdate.length, 1, `${table}: HQ UPDATE remains allowed`);
+      const [after] = await tx`select * from ${tx(`public.${table}`)} where id = ${row.id}`;
+      for (const [key, value] of Object.entries(edit)) eq(after[key], value, `${table}.${key}`);
+      const hqDelete = await tx`
+        delete from ${tx(`public.${table}`)} where id = ${row.id} returning id`;
+      eq(hqDelete.length, 1, `${table}: HQ DELETE remains allowed`);
+      await asDb(tx);
+      const gone = await tx`select id from ${tx(`public.${table}`)} where id = ${row.id}`;
+      eq(gone.length, 0, `${table}: the fixture was deleted`);
+    });
+  }
+
+  await step(
+    "direct inventory writes stay restricted without removing HQ delete access",
+    async () => {
+      const own = await mintItem(brA.id);
+      const foreign = await mintItem(brB.id);
+      for (const uid of [U.salesA, U.super]) {
+        await as(tx, uid);
+        const visible = await tx`
+        select id from public.inventory_items where id in (${own.id}, ${foreign.id})`;
+        eq(visible.length, uid === U.super ? 2 : 1, "inventory SELECT scope");
+        assert(
+          visible.some((row) => row.id === own.id),
+          "the caller cannot see own stock",
+        );
+        await expectStatementError(
+          tx,
+          "direct inventory insert",
+          () => tx`insert into public.inventory_items (product_id, branch_id, imei)
+                 values (${prod.id}, ${brA.id}, 'SMK-DENIED-STOCK')`,
+          "42501",
+        );
+        await expectStatementError(
+          tx,
+          "direct inventory update",
+          () => tx`update public.inventory_items set status = 'sold' where id = ${own.id}`,
+          "42501",
+        );
+        const removed = await tx`
+        delete from public.inventory_items where id in (${own.id}, ${foreign.id}) returning id`;
+        eq(removed.length, uid === U.super ? 2 : 0, "only HQ can delete inventory directly");
+      }
+      await asDb(tx);
+      const [remaining] = await tx`
+      select count(*)::int as n from public.inventory_items where id in (${own.id}, ${foreign.id})`;
+      eq(remaining.n, 0, "HQ deleted both inventory fixtures");
+    },
+  );
+
+  await step("a scoped SELECT uses an InitPlan without losing its branch predicate", async () => {
+    await as(tx, U.salesA);
+    const [row] = await tx`explain (format json) select id from public.inventory_items`;
+    const root = row["QUERY PLAN"][0].Plan;
+    const nodes = [];
+    const visit = (node) => {
+      nodes.push(node);
+      for (const child of node.Plans ?? []) visit(child);
+    };
+    visit(root);
+    assert(
+      nodes.some((node) => node["Parent Relationship"] === "InitPlan"),
+      "RLS has no InitPlan",
+    );
+    assert(
+      nodes.some(
+        (node) =>
+          /can_access_branch/.test(node.Filter ?? "") && /\bbranch_id\b/.test(node.Filter ?? ""),
+      ),
+      "the SELECT lost its row-dependent branch predicate",
+    );
+  });
 
   // ---------------------------------------------------------------------
   // 1. Cash sale
@@ -2031,6 +2191,89 @@ async function runAll(tx) {
     );
     assert(msg.includes("another account"), msg);
   });
+
+  const constraintCases = [
+    [
+      "finance_cases",
+      "chk_finance_cases_amount",
+      "partner_id",
+      partner.id,
+      [{ amount: 0 }, { amount: -1 }],
+    ],
+    [
+      "finance_cases",
+      "chk_finance_cases_commission",
+      "partner_id",
+      partner.id,
+      [{ commission: -1 }],
+    ],
+    [
+      "finance_partners",
+      "chk_finance_partners_comm",
+      "id",
+      partner.id,
+      [{ commission_pct: -1 }, { commission_pct: 101 }],
+    ],
+    ["purchases", "chk_purchases_total", "id", purchaseId, [{ total: -1 }]],
+    ["purchases", "chk_purchases_returned", "id", purchaseId, [{ returned: -1 }]],
+    ["purchases", "chk_purchases_paid", "id", purchaseId, [{ paid: -1 }]],
+    ["purchase_items", "chk_purchase_items_cost", "purchase_id", purchaseId, [{ cost: -1 }]],
+    [
+      "branches",
+      "chk_branches_max_discount",
+      "id",
+      brA.id,
+      [{ max_discount_pct: -1 }, { max_discount_pct: 101 }],
+    ],
+    ["branches", "chk_branches_expense_limit", "id", brA.id, [{ expense_limit: -1 }]],
+    [
+      "products",
+      "chk_products_prices",
+      "id",
+      prod.id,
+      [{ purchase_price: -1 }, { sale_price: -1 }],
+    ],
+    [
+      "sales",
+      "chk_sales_amounts",
+      "id",
+      saleId,
+      [{ subtotal: -1 }, { discount: -1 }, { total: -1 }, { paid: -1 }],
+    ],
+    [
+      "installment_plans",
+      "chk_installment_plans",
+      "id",
+      planId,
+      [
+        { financed_amount: 0 },
+        { down_payment: -1 },
+        { months: 0 },
+        { months: 37 },
+        { monthly_amount: 0 },
+      ],
+    ],
+    ["installments", "chk_installments", "id", firstInst?.id, [{ amount: 0 }, { paid_amount: -1 }]],
+    ["employees", "chk_employees_salary", "id", staff[0].id, [{ salary: -1 }]],
+  ];
+  for (const [table, constraint, key, id, invalidValues] of constraintCases) {
+    await step(`${constraint} rejects invalid fixture values`, async () => {
+      assert(id, `${constraint}: the workflow did not create its fixture`);
+      await asDb(tx);
+      const [fixture] = await tx`
+        select count(*)::int as n from ${tx(`public.${table}`)} where ${tx(key)} = ${id}`;
+      assert(fixture.n > 0, `${constraint}: no fixture rows were found`);
+      for (const values of invalidValues) {
+        await expectStatementError(
+          tx,
+          `${constraint}: ${JSON.stringify(values)}`,
+          () => tx`update ${tx(`public.${table}`)} set ${tx(values)} where ${tx(key)} = ${id}`,
+          "23514",
+          constraint,
+        );
+      }
+    });
+  }
 }
 
 (async () => {
