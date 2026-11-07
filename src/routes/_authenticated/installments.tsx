@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
 import { localDate } from "@/lib/date";
+import { COLLECTION_METHODS, methodLabel } from "@/lib/payment-methods";
 
 export const Route = createFileRoute("/_authenticated/installments")({
   head: () => ({ meta: [{ title: "Installments — Dealer ERP" }] }),
@@ -35,6 +36,9 @@ function Installments() {
   const [filter, setFilter] = useState<"due" | "upcoming" | "paid">("due");
   const [search, setSearch] = useState("");
   const [amounts, setAmounts] = useState<Record<string, string>>({});
+  // Which pocket the money came from matters to the day book: the drawer and
+  // the wallet are counted separately, so a collection needs its own method.
+  const [methods, setMethods] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const { data: branches = [] } = useBranches();
   const today = localDate();
@@ -85,10 +89,11 @@ function Installments() {
       return;
     }
     const amt = Math.min(typed, due);
+    const method = methods[id] ?? "cash";
     if (busy) return;
     setBusy(true);
     const offline = async () => {
-      await enqueue("kisti", { inst: id, amount: amt }, `Kisti ${taka(amt)}`, me?.id);
+      await enqueue("kisti", { inst: id, amount: amt, method }, `Kisti ${taka(amt)}`, me?.id);
       toast.success("Offline — collection saved and will sync when internet returns");
     };
     try {
@@ -96,7 +101,11 @@ function Installments() {
         await offline();
         return;
       }
-      const { error } = await supabase.rpc("pay_installment", { _inst: id, _amount: amt });
+      const { error } = await supabase.rpc("pay_installment", {
+        _inst: id,
+        _amount: amt,
+        _method: method,
+      });
       if (error && isNetworkError(error)) {
         await offline();
         return;
@@ -203,6 +212,20 @@ function Installments() {
                     <div className="flex items-center justify-end gap-2">
                       {due > 0 && canCollect(r.branch_id) && (
                         <>
+                          <select
+                            aria-label={`How the kisti for invoice ${r.installment_plans?.sales?.invoice_no ?? ""} was paid`}
+                            className="h-8 w-24 rounded-md border bg-background px-1 text-sm"
+                            value={methods[r.id] ?? "cash"}
+                            onChange={(e) =>
+                              setMethods((prev) => ({ ...prev, [r.id]: e.target.value }))
+                            }
+                          >
+                            {COLLECTION_METHODS.map((m) => (
+                              <option key={m} value={m}>
+                                {methodLabel(m)}
+                              </option>
+                            ))}
+                          </select>
                           <Input
                             type="number"
                             className="h-8 w-24"

@@ -23,6 +23,9 @@ import { fetchAllPages } from "@/lib/paginated-query";
 import { localDate, localDayEndIso, localDayStartIso } from "@/lib/date";
 import { downloadCsv } from "@/lib/csv";
 import { safeUrl } from "@/lib/url";
+import { EXPENSE_METHODS, methodLabel } from "@/lib/payment-methods";
+import { EXPENSE_HEADS } from "@/lib/expense-heads";
+import { useT } from "@/lib/i18n";
 
 export const Route = createFileRoute("/_authenticated/expenses")({
   head: () => ({
@@ -34,19 +37,10 @@ export const Route = createFileRoute("/_authenticated/expenses")({
   component: Expenses,
 });
 
-const CATS = [
-  "Shop rent",
-  "Electricity bill",
-  "Staff salary",
-  "Transport",
-  "Food",
-  "Internet & phone",
-  "Repair & maintenance",
-  "Other",
-];
-
-/** Sentinel option: pick it to type a category that is not one of the presets. */
-const CUSTOM_CAT = "Other…";
+// The ten heads a showroom keeps its day book in. The same list is a CHECK
+// constraint on expenses.category, so what is filed here is what totals in the
+// expense report — "Rent" and "Shop rent" can no longer be two different heads.
+const CATS: string[] = [...EXPENSE_HEADS];
 
 /**
  * expense_date is a `date` column, so the value is already YYYY-MM-DD and can be
@@ -67,6 +61,7 @@ function inDayRange(value: string, from: string, to: string) {
 }
 
 function Expenses() {
+  const { t } = useT();
   const qc = useQueryClient();
   const { data: me } = useMe();
   const { data: branches = [] } = useBranches();
@@ -78,12 +73,12 @@ function Expenses() {
   const today = localDate();
   const [f, setF] = useState({
     category: CATS[0] ?? "Other",
-    customCategory: "",
     amount: "",
     date: today,
     method: "cash",
     note: "",
     attachment: "",
+    billNo: "",
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -91,12 +86,17 @@ function Expenses() {
   const amount = Number(f.amount);
   const amountOk = Number.isFinite(amount) && amount > 0;
   // What actually travels to the RPC as _category.
-  const categoryValue = (f.category === CUSTOM_CAT ? f.customCategory : f.category).trim();
+  const categoryValue = f.category.trim();
   const categoryOk = categoryValue.length > 0;
+  // "Other" carries no meaning of its own, so the note is what makes the row
+  // auditable when somebody reads the book a month later.
+  const noteOk = categoryValue !== "Other" || f.note.trim().length > 0;
   const isAdmin = !!me?.canWriteHq;
   const isBranchManager = !!me && me.branch_id === branch && me.roles.includes("branch_manager");
   // The database decides approval — we only warn.
   const overLimit = limit != null && amountOk && amount > Number(limit);
+  // Mirrors submit_expense's own rule: an admin, or a manager inside the limit.
+  const autoApproved = isAdmin || (isBranchManager && !overLimit);
   const limitWarning =
     !overLimit || isAdmin
       ? null
@@ -119,6 +119,12 @@ function Expenses() {
       return fetchAllPages(q);
     },
   });
+  // approved_by has no foreign key, so PostgREST cannot embed the name. A
+  // signature nobody can read is not proof of approval.
+  const { data: staff = [] } = useQuery({
+    queryKey: ["expense-staff"],
+    queryFn: async () => fetchAllPages(supabase.from("profiles").select("id,full_name")),
+  });
 
   function resetForm() {
     setF((p) => ({
@@ -126,7 +132,7 @@ function Expenses() {
       amount: "",
       note: "",
       attachment: "",
-      customCategory: "",
+      billNo: "",
       date: localDate(),
     }));
   }
@@ -154,6 +160,10 @@ function Expenses() {
       toast.error("Enter a category name");
       return;
     }
+    if (!noteOk) {
+      toast.error("Write a note when the head is Other");
+      return;
+    }
     if (f.attachment.trim() && !safeUrl(f.attachment)) {
       toast.error("Receipt link must start with http:// or https://");
       return;
@@ -171,6 +181,7 @@ function Expenses() {
         _method: f.method,
         _note: f.note,
         _attachment: f.attachment,
+        _bill_no: f.billNo.trim(),
       });
       if (error) {
         toast.error(error.message);
@@ -193,6 +204,7 @@ function Expenses() {
           method: f.method,
           note: f.note,
           attachment: f.attachment,
+          bill_no: f.billNo.trim(),
         },
         `Expense ${categoryValue} ৳${amount}`,
         me?.id,
@@ -204,7 +216,7 @@ function Expenses() {
       await offline();
       return;
     }
-    const { data: st, error } = await supabase.rpc("submit_expense", {
+    const { data: voucher, error } = await supabase.rpc("submit_expense", {
       _branch: branch,
       _category: categoryValue,
       _amount: amount,
@@ -212,6 +224,7 @@ function Expenses() {
       _method: f.method,
       _note: f.note,
       _attachment: f.attachment,
+      _bill_no: f.billNo.trim(),
     });
     if (error && isNetworkError(error)) {
       await offline();
@@ -221,12 +234,14 @@ function Expenses() {
       toast.error(error.message);
       return;
     }
+    // submit_expense hands back the voucher it issued, which is the number the
+    // shopkeeper quotes when the expense turns up on paper.
     toast.success(
-      st === "approved"
-        ? "Expense recorded"
+      autoApproved
+        ? `Expense saved — voucher ${voucher}`
         : overLimit
-          ? "Above the branch limit — sent for admin approval"
-          : "Sent for approval",
+          ? `Voucher ${voucher} is above the branch limit — waiting for admin approval`
+          : `Voucher ${voucher} sent for approval`,
     );
     resetForm();
     qc.invalidateQueries();
@@ -242,22 +257,24 @@ function Expenses() {
   function editExpense(e: (typeof data)[number]) {
     setBranch(e.branch_id);
     setEditingId(e.id);
-    const isPreset = CATS.includes(e.category);
     setF({
-      category: isPreset ? e.category : CUSTOM_CAT,
-      customCategory: isPreset ? "" : e.category,
+      category: CATS.includes(e.category) ? e.category : "Other",
       amount: String(e.amount),
       date: e.expense_date.slice(0, 10),
       method: e.method,
       note: e.note ?? "",
       attachment: e.attachment_url ?? "",
+      billNo: e.bill_no ?? "",
     });
   }
   const bname = (id: string) => branches.find((b) => b.id === id)?.name ?? "";
   const shown = data.filter(
     (e) =>
       inDayRange(e.expense_date, from, to) &&
-      (!search || `${e.category} ${e.note ?? ""}`.toLowerCase().includes(search.toLowerCase())) &&
+      (!search ||
+        `${e.category} ${e.note ?? ""} ${e.voucher_no ?? ""} ${e.bill_no ?? ""}`
+          .toLowerCase()
+          .includes(search.toLowerCase())) &&
       (statusFilter === "any" || e.status === statusFilter),
   );
   // The total must describe the rows on screen, not the whole table.
@@ -271,13 +288,20 @@ function Expenses() {
   function exportCsv() {
     downloadCsv(
       shown.map((e) => ({
+        Voucher: e.voucher_no ?? "",
         Date: e.expense_date.slice(0, 10),
         Branch: bname(e.branch_id),
         Category: e.category,
+        Bill: e.bill_no ?? "",
         Note: e.note ?? "",
-        Method: e.method,
+        Method: methodLabel(e.method),
         Amount: Number(e.amount),
         Status: e.status,
+        "Approved by": e.approved_by
+          ? (staff.find((u) => u.id === e.approved_by)?.full_name ?? "")
+          : "",
+        "Approved on": e.approved_at ? new Date(e.approved_at).toLocaleString() : "",
+        Receipt: e.attachment_url ?? "",
       })),
       `expenses-${from || "all"}-to-${to || "all"}.csv`,
     );
@@ -291,14 +315,14 @@ function Expenses() {
 
   return (
     <div>
-      <PageHeader title="Expenses">
+      <PageHeader title={t("Expenses")}>
         <BranchPicker value={branch} onChange={setBranch} allowAll />
       </PageHeader>
       {canSubmit && (
-        <Card className="mb-4 grid gap-2 p-4 md:grid-cols-6">
+        <Card className="mb-4 grid gap-2 p-4 md:grid-cols-4">
           <div>
             <Label className="text-xs" htmlFor="exp-category">
-              Category
+              {t("Category")}
             </Label>
             <select
               id="exp-category"
@@ -308,39 +332,14 @@ function Expenses() {
             >
               {CATS.map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {t(c)}
                 </option>
               ))}
-              <option value={CUSTOM_CAT}>{CUSTOM_CAT}</option>
             </select>
           </div>
-          {f.category === CUSTOM_CAT && (
-            <div className="md:col-span-2">
-              <Label className="text-xs" htmlFor="exp-category-custom">
-                Category name
-              </Label>
-              <Input
-                id="exp-category-custom"
-                list="exp-category-options"
-                value={f.customCategory}
-                onChange={(e) => setF({ ...f, customCategory: e.target.value })}
-                placeholder="e.g. Generator fuel"
-                aria-label="Custom expense category"
-                aria-invalid={f.customCategory.trim().length === 0}
-              />
-              {!f.customCategory.trim() && (
-                <p className="mt-1 text-xs text-destructive">Enter a category name to save.</p>
-              )}
-              <datalist id="exp-category-options">
-                {CATS.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </div>
-          )}
           <div>
             <Label className="text-xs" htmlFor="exp-amount">
-              Amount ৳
+              {t("Amount")} ৳
             </Label>
             <Input
               id="exp-amount"
@@ -372,21 +371,38 @@ function Expenses() {
               value={f.method}
               onChange={(e) => setF({ ...f, method: e.target.value })}
             >
-              {["cash", "bank", "bkash", "nagad"].map((m) => (
+              {EXPENSE_METHODS.map((m) => (
                 <option key={m} value={m}>
-                  {m}
+                  {methodLabel(m)}
                 </option>
               ))}
             </select>
           </div>
           <div>
             <Label className="text-xs" htmlFor="exp-note">
-              Note
+              {t("Note")}
             </Label>
             <Input
               id="exp-note"
               value={f.note}
               onChange={(e) => setF({ ...f, note: e.target.value })}
+              placeholder={f.category === "Other" ? "What was the money for?" : ""}
+            />
+            {f.category === "Other" && !f.note.trim() && (
+              <p className="mt-1 text-xs text-destructive">
+                A note is required when the head is “Other”.
+              </p>
+            )}
+          </div>
+          <div>
+            <Label className="text-xs" htmlFor="exp-bill">
+              {t("Bill / token no")}
+            </Label>
+            <Input
+              id="exp-bill"
+              value={f.billNo}
+              onChange={(e) => setF({ ...f, billNo: e.target.value })}
+              placeholder="e.g. UNB-1049283"
             />
           </div>
           <div>
@@ -400,9 +416,12 @@ function Expenses() {
               placeholder="https://"
             />
           </div>
-          <div className="md:col-span-6 flex flex-wrap items-center gap-3">
-            <Button onClick={submit} disabled={busy || !amountOk || !canSubmit || !categoryOk}>
-              {editingId ? "Save changes" : "Add expense"}
+          <div className="md:col-span-4 flex flex-wrap items-center gap-3">
+            <Button
+              onClick={submit}
+              disabled={busy || !amountOk || !canSubmit || !categoryOk || !noteOk}
+            >
+              {editingId ? "Save changes" : t("Add expense")}
             </Button>
             {editingId && (
               <Button
@@ -516,22 +535,27 @@ function Expenses() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Branch</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Note</TableHead>
-              <TableHead>Method</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead>{t("Voucher")}</TableHead>
+              <TableHead>{t("Date")}</TableHead>
+              <TableHead>{t("Branch")}</TableHead>
+              <TableHead>{t("Category")}</TableHead>
+              <TableHead>{t("Bill")}</TableHead>
+              <TableHead>{t("Note")}</TableHead>
+              <TableHead>{t("Method")}</TableHead>
+              <TableHead className="text-right">{t("Amount")}</TableHead>
+              <TableHead>{t("Status")}</TableHead>
+              <TableHead>{t("Approved by")}</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
             {shown.map((e) => (
               <TableRow key={e.id}>
+                <TableCell className="text-xs tabular">{e.voucher_no ?? "—"}</TableCell>
                 <TableCell>{e.expense_date.slice(0, 10)}</TableCell>
                 <TableCell>{bname(e.branch_id)}</TableCell>
-                <TableCell>{e.category}</TableCell>
+                <TableCell>{t(e.category)}</TableCell>
+                <TableCell className="text-xs tabular">{e.bill_no ?? "—"}</TableCell>
                 <TableCell className="text-xs">
                   {e.note}
                   {safeUrl(e.attachment_url) && (
@@ -545,7 +569,7 @@ function Expenses() {
                     </a>
                   )}
                 </TableCell>
-                <TableCell>{e.method}</TableCell>
+                <TableCell>{methodLabel(e.method)}</TableCell>
                 <TableCell className="text-right tabular">{taka(e.amount)}</TableCell>
                 <TableCell>
                   <Badge
@@ -559,6 +583,16 @@ function Expenses() {
                   >
                     {e.status}
                   </Badge>
+                </TableCell>
+                <TableCell className="text-xs">
+                  {e.approved_by
+                    ? (staff.find((u) => u.id === e.approved_by)?.full_name ?? "approved")
+                    : "—"}
+                  {e.approved_at && (
+                    <div className="text-muted-foreground">
+                      {new Date(e.approved_at).toLocaleDateString()}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell>
                   <div className="flex gap-1">
@@ -583,7 +617,7 @@ function Expenses() {
             ))}
             {shown.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="py-8 text-center text-muted-foreground">
+                <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
                   {emptyMessage}
                 </TableCell>
               </TableRow>

@@ -657,30 +657,41 @@ async function runAll(tx) {
   });
 
   // ---------------------------------------------------------------------
-  // 5. Expenses
+  // 5. Expenses — the ten heads, the voucher, the signature
   // ---------------------------------------------------------------------
+  let voucherPending = null;
+  let voucherSmall = null;
+  let voucherTravel = null;
+
   await step("an expense below the branch limit is approved straight away", async () => {
     await as(tx, U.manager);
     const rows = await tx`
-      select public.submit_expense(${brA.id}, 'Tea', 500, current_date, 'cash', 'client visit', '') as status`;
-    eq(rows[0].status, "approved", "the expense status");
+      select public.submit_expense(${brA.id}, 'Food', 500, current_date, 'cash', 'client visit', '', 'BILL-1') as voucher`;
+    const voucher = rows[0].voucher;
+    assert(/^EXP-/.test(voucher), `the voucher is not an expense voucher: ${voucher}`);
+    voucherSmall = voucher;
     await asDb(tx);
-    const [expense] = await tx`
-      select * from public.expenses where branch_id = ${brA.id} and category = 'Tea'`;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucher}`;
     assert(expense, "the expense row was not written");
     eq(expense.status, "approved", "the stored expense status");
+    eq(expense.approved_by, U.manager, "the auto approval is not signed by the submitter");
+    assert(expense.approved_at, "the auto approval has no date");
+    eq(expense.bill_no, "BILL-1", "the bill number on the expense");
     const [entry] = await tx`select * from public.transactions where ref_id = ${expense.id}`;
     near(entry.amount, 500, "the expense transaction");
+    eq(entry.category, "Food", "the expense cash book head");
   });
 
   await step("an expense above the branch limit waits for the head office", async () => {
     await as(tx, U.manager);
     const rows = await tx`
-      select public.submit_expense(${brA.id}, 'Air ticket', 9000, current_date, 'cash', 'travel', '') as status`;
-    eq(rows[0].status, "pending", "the expense status");
+      select public.submit_expense(${brA.id}, 'Transport', 9000, current_date, 'cash', 'travel', '') as voucher`;
+    voucherPending = rows[0].voucher;
     await asDb(tx);
-    const [expense] = await tx`
-      select * from public.expenses where branch_id = ${brA.id} and category = 'Air ticket'`;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucherPending}`;
+    eq(expense.status, "pending", "an oversized expense must wait");
+    assert(expense.approved_by === null, "a pending expense already has an approver");
+    assert(expense.approved_at === null, "a pending expense already has an approval date");
     const [entry] =
       await tx`select count(*)::int as n from public.transactions where ref_id = ${expense.id}`;
     eq(entry.n, 0, "a pending expense must not touch the cash book");
@@ -689,11 +700,13 @@ async function runAll(tx) {
   await step("a salesman cannot approve an expense", async () => {
     await as(tx, U.salesA);
     const rows = await tx`
-      select public.submit_expense(${brA.id}, 'Snacks', 200, current_date, 'cash', 'lunch', '') as status`;
-    eq(rows[0].status, "pending", "the expense status");
+      select public.submit_expense(${brA.id}, 'Food', 200, current_date, 'cash', 'lunch', '') as voucher`;
+    const voucher = rows[0].voucher;
+    assert(voucher !== voucherSmall, "two expenses were issued the same voucher");
+    voucherTravel = voucher;
     await asDb(tx);
-    const [expense] = await tx`
-      select * from public.expenses where branch_id = ${brA.id} and category = 'Snacks'`;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucher}`;
+    eq(expense.status, "pending", "a salesman expense must wait for approval");
     await as(tx, U.salesA);
     await expectError(
       tx,
@@ -704,28 +717,49 @@ async function runAll(tx) {
     );
   });
 
-  await step("the head office approves a pending expense", async () => {
+  await step("a head that is not one of the ten is refused", async () => {
+    await as(tx, U.manager);
+    await expectError(
+      tx,
+      "unknown expense head",
+      "submit_expense",
+      [
+        brA.id,
+        "Tea and snacks for the shop",
+        500,
+        new Date().toISOString().slice(0, 10),
+        "cash",
+        "note",
+        "",
+        "",
+      ],
+      "expenses_category_check",
+    );
+  });
+
+  await step("the head office approves a pending expense and signs it", async () => {
     await asDb(tx);
-    const [expense] = await tx`
-      select * from public.expenses where branch_id = ${brA.id} and category = 'Air ticket'`;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucherPending}`;
     await as(tx, U.super);
     await tx`select public.decide_expense(${expense.id}, true)`;
     await asDb(tx);
     const [after] = await tx`select * from public.expenses where id = ${expense.id}`;
     eq(after.status, "approved", "the approved expense status");
+    eq(after.approved_by, U.super, "the approver of the expense");
+    assert(after.approved_at, "the approval date of the expense");
     const [entry] = await tx`select * from public.transactions where ref_id = ${expense.id}`;
     near(entry.amount, 9000, "the approved expense transaction");
   });
 
   await step("a rejected expense never reaches the cash book", async () => {
     await asDb(tx);
-    const [expense] = await tx`
-      select * from public.expenses where branch_id = ${brA.id} and category = 'Snacks'`;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucherTravel}`;
     await as(tx, U.super);
     await tx`select public.decide_expense(${expense.id}, false)`;
     await asDb(tx);
     const [after] = await tx`select * from public.expenses where id = ${expense.id}`;
     eq(after.status, "rejected", "the rejected expense status");
+    assert(after.approved_at === null, "a rejected expense must not carry an approval date");
     const [entry] =
       await tx`select count(*)::int as n from public.transactions where ref_id = ${expense.id}`;
     eq(entry.n, 0, "a rejected expense must not touch the cash book");
@@ -734,27 +768,28 @@ async function runAll(tx) {
   await step("only the creator or an admin may edit a pending expense", async () => {
     await as(tx, U.salesA);
     const rows = await tx`
-      select public.submit_expense(${brA.id}, 'Taxi', 300, current_date, 'cash', 'home', '') as status`;
-    eq(rows[0].status, "pending", "the expense status");
+      select public.submit_expense(${brA.id}, 'Transport', 300, current_date, 'cash', 'home', '', 'BILL-2') as voucher`;
+    const voucher = rows[0].voucher;
     await asDb(tx);
-    const [expense] = await tx`
-      select * from public.expenses where branch_id = ${brA.id} and category = 'Taxi'`;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucher}`;
 
     await as(tx, U.helper);
     await expectError(
       tx,
       "helper edits",
       "update_pending_expense",
-      [expense.id, "Taxi", 300, "2026-11-03", "cash", "home", ""],
+      [expense.id, "Transport", 300, "2026-11-03", "cash", "home", "", ""],
       "Only the creator or an admin can edit this expense",
     );
 
     await as(tx, U.salesA);
-    await tx`select public.update_pending_expense(${expense.id}, 'Taxi fare', 350, '2026-11-03', 'cash', 'home', '')`;
+    await tx`select public.update_pending_expense(${expense.id}, 'Repair', 350, '2026-11-03', 'cash', 'home', '', 'BILL-3')`;
     await asDb(tx);
     const [after] = await tx`select * from public.expenses where id = ${expense.id}`;
-    eq(after.category, "Taxi fare", "the edited category");
+    eq(after.category, "Repair", "the edited category");
     near(after.amount, 350, "the edited amount");
+    eq(after.bill_no, "BILL-3", "the edited bill number");
+    eq(after.voucher_no, voucher, "the voucher of an edited expense");
   });
 
   // ---------------------------------------------------------------------
@@ -1368,6 +1403,633 @@ async function runAll(tx) {
       !dues.some((r) => r.customer_id === custA.id),
       "a customer that paid everything is still listed as a debtor",
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // 15. Payment methods a showroom actually takes
+  // ---------------------------------------------------------------------
+  /** The Dhaka calendar day the statement is written on, offset by n days. */
+  const dayText = async (offset = 0) => {
+    const rows = await tx`
+      select (((now() at time zone 'Asia/Dhaka')::date + ${offset}::int))::text as d`;
+    return rows[0].d;
+  };
+
+  await step("a card sale saves the invoice and the cash book row", async () => {
+    const item = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    const [sale] = await tx`
+      select public.create_sale(${brA.id}, ${custA.id}, ${cart(item.id)}::text::jsonb, 0, 12000, 'card', 'cash', null, null) as id`;
+    await asDb(tx);
+    const [row] = await tx`select payment_method from public.sales where id = ${sale.id}`;
+    eq(row.payment_method, "card", "the payment method on the invoice");
+    const [entry] = await tx`
+      select method from public.transactions where ref_id = ${sale.id} and kind = 'income'`;
+    eq(entry.method, "card", "the method copied into the cash book");
+  });
+
+  await step("a rocket kisti collection is booked as rocket income", async () => {
+    await asDb(tx);
+    const [inst] = await tx`
+      select i.id, p.id as plan, i.amount - i.paid_amount as due
+      from public.installments i
+      join public.installment_plans p on p.id = i.plan_id
+      where i.paid_amount < i.amount order by i.due_date limit 1`;
+    assert(inst, "there is no open installment left to collect");
+    await as(tx, U.salesA);
+    await tx`select public.pay_installment(${inst.id}, ${inst.due}, 'rocket')`;
+    await asDb(tx);
+    const [entry] = await tx`
+      select * from public.transactions
+      where ref_id = ${inst.plan} and kind = 'income' and category = 'Installment'
+      order by created_at desc limit 1`;
+    assert(entry, "the kisti collection never reached the cash book");
+    eq(entry.method, "rocket", "the wallet the kisti arrived in");
+    near(entry.amount, inst.due, "the amount collected in rocket");
+  });
+
+  await step("a payment method the shop does not take is refused", async () => {
+    const item = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    await expectError(
+      tx,
+      "unknown payment method",
+      "create_sale",
+      [brA.id, custA.id, JSON.parse(cart(item.id)), 0, 12000, "paypal", "cash", null, null],
+      "sales_payment_method_check",
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // 16. Daily cash and collections (requirement B)
+  // ---------------------------------------------------------------------
+  let cashToday = null;
+
+  await step("the daily statement adds up to the cash in the drawer", async () => {
+    cashToday = await dayText();
+    await as(tx, U.accountant);
+    await tx`select public.save_daily_cash_opening(${brA.id}, ${cashToday}, 5000, null, 'smoke opening')`;
+    await as(tx, U.manager);
+    const before = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+
+    const item = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    await tx`
+      select public.create_sale(${brA.id}, ${custA.id}, ${cart(item.id)}::text::jsonb, 0, 12000, 'cash', 'cash', null, null)`;
+
+    await asDb(tx);
+    const [inst] = await tx`
+      select id, amount - paid_amount as due from public.installments
+      where paid_amount < amount order by due_date limit 1`;
+    const kisti = Math.min(2000, Number(inst.due));
+    await as(tx, U.salesA);
+    await tx`select public.pay_installment(${inst.id}, ${kisti}, 'cash')`;
+
+    await as(tx, U.manager);
+    await tx`
+      select public.submit_expense(${brA.id}, 'Food', 500, ${cashToday}, 'cash', 'staff lunch', '', '')`;
+    await tx`select public.record_hq_deposit(${brA.id}, 2000, 'cash', 'weekly deposit')`;
+
+    const after = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+
+    near(after.opening_cash, 5000, "the cash the day opened with");
+    near(Number(after.cash_sales) - Number(before.cash_sales), 12000, "today's cash sales");
+    near(
+      Number(after.cash_collections) - Number(before.cash_collections),
+      kisti,
+      "the cash kisti collected",
+    );
+    near(Number(after.cash_expenses) - Number(before.cash_expenses), 500, "today's cash expenses");
+    near(
+      Number(after.hq_deposits) - Number(before.hq_deposits),
+      2000,
+      "the deposit to the head office",
+    );
+    near(
+      Number(after.cash_deposits) - Number(before.cash_deposits),
+      2000,
+      "the cash paid to the head office",
+    );
+    near(
+      Number(after.closing_cash) - Number(before.closing_cash),
+      12000 + kisti - 500 - 2000,
+      "what the drawer gained",
+    );
+    near(
+      after.closing_cash,
+      Number(after.opening_cash) +
+        Number(after.cash_sales) +
+        Number(after.cash_collections) +
+        Number(after.cash_other_income) -
+        Number(after.cash_expenses) -
+        Number(after.cash_deposits),
+      "closing = opening + cash sales + cash collected - cash spent - deposited",
+    );
+    assert(after.counted_cash === null, "a day nobody counted must not report counted cash");
+    eq(after.balanced, false, "a day that was not counted is not called balanced");
+  });
+
+  await step("bank, card and wallet money never enters the drawer", async () => {
+    const cardItem = await mintItem(brA.id);
+    const walletItem = await mintItem(brA.id);
+    await as(tx, U.manager);
+    const before = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    await as(tx, U.salesA);
+    await tx`
+      select public.create_sale(${brA.id}, ${custA.id}, ${cart(cardItem.id)}::text::jsonb, 0, 12000, 'card', 'cash', null, null)`;
+    await tx`
+      select public.create_sale(${brA.id}, ${custA.id}, ${cart(walletItem.id)}::text::jsonb, 0, 12000, 'rocket', 'cash', null, null)`;
+
+    await as(tx, U.manager);
+    const after = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    near(
+      Number(after.bank_card_sales) - Number(before.bank_card_sales),
+      12000,
+      "today's bank and card sales",
+    );
+    near(Number(after.mfs_sales) - Number(before.mfs_sales), 12000, "today's wallet sales");
+    near(Number(after.cash_sales) - Number(before.cash_sales), 0, "a card sale is not a cash sale");
+    near(
+      Number(after.closing_cash) - Number(before.closing_cash),
+      0,
+      "the drawer never saw this money",
+    );
+  });
+
+  await step("the counted drawer decides whether the day balances", async () => {
+    await as(tx, U.accountant);
+    const statement = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    const expected = Number(statement.closing_cash);
+
+    await tx`select public.save_daily_cash_opening(${brA.id}, ${cashToday}, null, ${expected}, 'counted')`;
+    const counted = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    near(counted.variance, 0, "a drawer counted exactly right");
+    eq(counted.balanced, true, "a drawer counted right is balanced");
+    near(counted.opening_cash, 5000, "the count must not overwrite the opening balance");
+
+    await tx`select public.save_daily_cash_opening(${brA.id}, ${cashToday}, null, ${expected - 500}, 'short')`;
+    const short = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    near(short.variance, -500, "the variance is what was counted minus what should be there");
+    eq(short.balanced, false, "a short drawer is not balanced");
+  });
+
+  await step("an unwritten day carries the last opening balance forward", async () => {
+    const tomorrow = await dayText(1);
+    await as(tx, U.accountant);
+    const row = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${tomorrow})`
+    )[0];
+    near(row.opening_cash, 5000, "the carried forward opening");
+    near(row.closing_cash, 5000, "a quiet day keeps the cash it started with");
+    assert(row.counted_cash === null, "an unwritten day has no count");
+  });
+
+  await step("the cash day is guarded by the same people as the cash book", async () => {
+    await as(tx, U.salesA);
+    await expectError(
+      tx,
+      "salesman sets the opening",
+      "save_daily_cash_opening",
+      [brA.id, cashToday, 1000, null, "no"],
+      "Only an accountant, branch manager or admin",
+    );
+    await expectError(
+      tx,
+      "deposit to another branch",
+      "record_hq_deposit",
+      [brB.id, 1000, "cash", "no"],
+      "Not allowed for this branch",
+    );
+    await expectError(
+      tx,
+      "empty deposit",
+      "record_hq_deposit",
+      [brA.id, 0, "cash", "no"],
+      "Amount must be greater than zero",
+    );
+    await expectError(
+      tx,
+      "deposit in an unknown method",
+      "record_hq_deposit",
+      [brA.id, 1000, "crypto", "no"],
+      "Unknown payment method",
+    );
+    await as(tx, U.salesB);
+    await expectError(
+      tx,
+      "another branch's cash statement",
+      "daily_cash_reconciliation",
+      [brA.id, cashToday],
+      "Not allowed for this branch",
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // 17. The stock movement ledger (requirement C)
+  // ---------------------------------------------------------------------
+  await step("a purchase, a sale and a return each leave a movement line", async () => {
+    await as(tx, U.manager);
+    await tx`
+      select public.create_purchase(${supplier.id}, ${brA.id}, 'SMK-MOV-1',
+        ${JSON.stringify([
+          { product_id: prod.id, imei: "SMK-M-1", imei2: "990001", cost: 10000 },
+          { product_id: prod.id, imei: "SMK-M-2", imei2: "990002", cost: 10000 },
+        ])}::text::jsonb, 0, 'cash', 'movement test') as id`;
+    await asDb(tx);
+    const [item1] = await tx`select id from public.inventory_items where imei = 'SMK-M-1'`;
+    const received = await tx`
+      select * from public.inventory_movements where item_id = ${item1.id} order by seq`;
+    eq(received.length, 1, "the number of lines a purchase writes");
+    eq(received[0].movement_type, "receive", "the type of the purchase line");
+    eq(received[0].qty, 1, "a bought phone joins the shelf");
+    eq(received[0].ref_type, "purchase", "the document behind the receive line");
+
+    await as(tx, U.salesA);
+    const [sale] = await tx`
+      select public.create_sale(${brA.id}, ${custA.id}, ${cart(item1.id)}::text::jsonb, 0, 12000, 'cash', 'cash', null, null) as id`;
+    await asDb(tx);
+    const [sold] = await tx`
+      select * from public.inventory_movements
+      where item_id = ${item1.id} order by seq desc limit 1`;
+    eq(sold.movement_type, "sale", "the type of the sale line");
+    eq(sold.qty, -1, "a sold phone leaves the shelf");
+    eq(sold.ref_type, "sale", "the invoice behind the sale line");
+    eq(sold.ref_id, sale.id, "the invoice the sale line points at");
+
+    await as(tx, U.manager);
+    await tx`select public.return_sale(${sale.id}, 'the customer changed mind')`;
+    await asDb(tx);
+    const [back] = await tx`
+      select * from public.inventory_movements
+      where item_id = ${item1.id} order by seq desc limit 1`;
+    eq(back.movement_type, "sale_return", "the type of the return line");
+    eq(back.qty, 1, "a returned phone is back on the shelf");
+  });
+
+  await step("a transfer books the phone out of one branch and into the other", async () => {
+    const item = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    const [t] = await tx`
+      select public.create_transfer(${brA.id}, ${brB.id}, ${[item.id]}::uuid[], 'movement test') as id`;
+    await asDb(tx);
+    const [out] = await tx`
+      select * from public.inventory_movements
+      where item_id = ${item.id} and movement_type = 'transfer_out'`;
+    assert(out, "the transfer wrote no outgoing line");
+    eq(out.qty, -1, "an outgoing phone is one less on the source shelf");
+    eq(out.branch_id, brA.id, "the outgoing line belongs to the source branch");
+    eq(out.ref_type, "transfer", "the document behind the transfer line");
+
+    await as(tx, U.super);
+    await tx`select public.receive_transfer(${t.id})`;
+    await asDb(tx);
+    const rows = await tx`
+      select * from public.inventory_movements where item_id = ${item.id} order by seq`;
+    const inn = rows.find((r) => r.movement_type === "transfer_in");
+    assert(inn, "the receipt wrote no incoming line");
+    eq(inn.qty, 1, "an incoming phone is one more on the destination shelf");
+    eq(inn.branch_id, brB.id, "the incoming line belongs to the destination branch");
+    eq(
+      rows.reduce((a, r) => a + r.qty, 0),
+      1,
+      "the phone is somewhere exactly once",
+    );
+  });
+
+  await step("a cancelled transfer goes back to the branch that never sent it", async () => {
+    const item = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    const [t] = await tx`
+      select public.create_transfer(${brA.id}, ${brB.id}, ${[item.id]}::uuid[], 'to be cancelled') as id`;
+    await as(tx, U.manager);
+    await tx`select public.cancel_transfer(${t.id}, 'plans changed')`;
+    await asDb(tx);
+    const rows = await tx`
+      select * from public.inventory_movements where item_id = ${item.id} order by seq`;
+    eq(
+      rows.map((r) => r.movement_type).join(">"),
+      "receive>transfer_out>transfer_cancel",
+      "the trail a cancelled transfer leaves",
+    );
+    eq(
+      rows.reduce((a, r) => a + r.qty, 0),
+      1,
+      "a cancelled phone is still at home",
+    );
+    assert(
+      rows.every((r) => r.branch_id === brA.id),
+      "a cancelled transfer left a movement line in the destination branch",
+    );
+    eq(rows[2].branch_id, brA.id, "the cancellation is booked at the source branch");
+  });
+
+  await step("damage and adjustment each get their own numbered voucher", async () => {
+    const item = await mintItem(brA.id);
+    await as(tx, U.manager);
+    const [damage] =
+      await tx`select public.mark_inventory_damaged(${item.id}, 'water damage') as voucher`;
+    assert(/^DMG-/.test(damage.voucher), `the damage voucher is not numbered: ${damage.voucher}`);
+    await asDb(tx);
+    const [dmgRow] = await tx`
+      select * from public.inventory_movements where item_id = ${item.id} and movement_type = 'damage'`;
+    assert(dmgRow, "the damage wrote no movement line");
+    eq(dmgRow.qty, -1, "a damaged phone is off the sellable shelf");
+    eq(dmgRow.voucher_no, damage.voucher, "the damage line carries its voucher");
+    eq(dmgRow.reason, "water damage", "the damage line carries the reason");
+
+    await as(tx, U.manager);
+    await tx`select public.restore_damaged_inventory(${item.id}, 'repaired under warranty')`;
+    await asDb(tx);
+    const [fixed] = await tx`
+      select * from public.inventory_movements
+      where item_id = ${item.id} and movement_type = 'damage_restore'`;
+    assert(fixed, "the restoration wrote no movement line");
+    eq(fixed.qty, 1, "a repaired phone is sellable again");
+
+    await as(tx, U.manager);
+    const [adj] =
+      await tx`select public.adjust_inventory(${item.id}, 'remove', 'counted missing') as voucher`;
+    assert(/^ADJ-/.test(adj.voucher), `the adjustment voucher is not numbered: ${adj.voucher}`);
+    await asDb(tx);
+    const [out] = await tx`
+      select * from public.inventory_movements
+      where item_id = ${item.id} and movement_type = 'adjustment' and qty = -1`;
+    assert(out, "writing the phone off left no adjustment line");
+    eq(out.voucher_no, adj.voucher, "the adjustment line carries its voucher");
+    eq(out.reason, "counted missing", "the adjustment line carries the reason");
+
+    await as(tx, U.manager);
+    await tx`select public.adjust_inventory(${item.id}, 'add', 'found behind the counter')`;
+    await asDb(tx);
+    const [stock] = await tx`select status from public.inventory_items where id = ${item.id}`;
+    eq(stock.status, "in_stock", "a phone added back is on the shelf again");
+    const inCount = await tx`
+      select count(*)::int as n from public.inventory_movements
+      where item_id = ${item.id} and movement_type = 'adjustment' and qty = 1`;
+    eq(inCount[0].n, 1, "adding the phone back wrote an adjustment line");
+  });
+
+  await step("the stock statement closes on what is actually on the shelf", async () => {
+    await as(tx, U.manager);
+    const rows = await tx`
+      select * from public.stock_reconciliation(${brA.id}, ${"2000-01-01"}, ${"2999-12-31"})`;
+    const row = rows.find((r) => r.product_id === prod.id);
+    assert(row, "the model is missing from the stock statement");
+    near(
+      Number(row.closing),
+      Number(row.opening) +
+        Number(row.receive) +
+        Number(row.transfer_in) -
+        Number(row.transfer_out) -
+        Number(row.sales) +
+        Number(row.sales_return) -
+        Number(row.purchase_return) +
+        Number(row.adjustment) -
+        Number(row.damage) +
+        Number(row.damage_restore),
+      "the statement follows the showroom book formula",
+    );
+    eq(row.closing, row.on_shelf, "the statement agrees with the shelf");
+    assert(
+      rows.every((r) => r.matches),
+      `the ledger drifted from the shelf in ${rows
+        .filter((r) => !r.matches)
+        .map((r) => r.model)
+        .join(", ")}`,
+    );
+  });
+
+  await step("the IMEI ledger shows both numbers and the voucher behind each line", async () => {
+    await as(tx, U.manager);
+    const rows = await tx`
+      select * from public.stock_imei_ledger(${brA.id}, ${"2000-01-01"}, ${"2999-12-31"})
+      where imei = 'SMK-M-1'`;
+    assert(rows.length >= 3, `the trail of one phone is too short: ${rows.length} lines`);
+    eq(rows[0].movement_type, "receive", "the first line of a phone's life");
+    assert(
+      rows.every((r) => r.imei2 === "990001"),
+      "the second IMEI is missing from the trail",
+    );
+    assert(
+      rows.every((r) => r.model && r.brand && r.variant),
+      "the trail does not name the model",
+    );
+    assert(
+      rows.some((r) => r.movement_type === "sale_return"),
+      "the return is missing from the trail",
+    );
+  });
+
+  await step("a branch cannot read another branch's stock ledger", async () => {
+    await as(tx, U.salesA);
+    const foreign = await tx`
+      select count(*)::int as n from public.inventory_movements where branch_id = ${brB.id}`;
+    eq(foreign[0].n, 0, "branch A can see branch B's movements");
+    await expectError(
+      tx,
+      "another branch's statement",
+      "stock_reconciliation",
+      [brB.id, "2000-01-01", "2999-12-31"],
+      "Not allowed for this branch",
+    );
+    await expectError(
+      tx,
+      "reversed dates",
+      "stock_reconciliation",
+      [brA.id, "2026-11-05", "2026-11-01"],
+      "start date must not be after",
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // 18. A queued entry keeps the day and the person it belongs to
+  // ---------------------------------------------------------------------
+  await step("an offline sale lands on the day and under the person who sold it", async () => {
+    const ref = "11111111-2222-3333-4444-555555555566";
+    const item = await mintItem(brA.id);
+    const payload = JSON.stringify({
+      branch: brA.id,
+      customer: custA.id,
+      phone: "",
+      cust_name: "",
+      items: [{ item_id: item.id, price: 12000 }],
+      discount: 0,
+      paid: 12000,
+      method: "cash",
+      sale_type: "cash",
+      months: "",
+      discount_reason: "",
+    });
+    await as(tx, U.salesA);
+    const applied = await tx`
+      select public.apply_offline_op(
+        ${ref}::uuid, 'sale', ${payload}::text::jsonb,
+        (now() - interval '2 days'), 'smoke-device', ${U.salesA}) as res`;
+    eq(applied[0].res.status, "applied", "the backdated offline sale");
+
+    await asDb(tx);
+    const [sale] = await tx`
+      select * from public.sales where id = ${applied[0].res.result.sale_id}`;
+    const twoDaysAgo = Date.now() - 47 * 3600 * 1000;
+    assert(
+      new Date(sale.created_at).getTime() < twoDaysAgo,
+      `the replay landed on today: ${sale.created_at}`,
+    );
+    eq(sale.created_by, U.salesA, "the replay credited the wrong salesman");
+    const [entry] = await tx`
+      select * from public.transactions where ref_id = ${sale.id} and kind = 'income'`;
+    assert(
+      new Date(entry.created_at).getTime() < twoDaysAgo,
+      `the cash book row landed on today: ${entry.created_at}`,
+    );
+    eq(entry.created_by, U.salesA, "the cash book row was credited to whoever synced");
+  });
+
+  await step("an offline sale never borrows a customer from another showroom", async () => {
+    const ref = "11111111-2222-3333-4444-555555555588";
+    const item = await mintItem(brA.id);
+    // The phone belongs to custB at the other branch. Replaying as the owner of
+    // the queue sees every branch, so an unscoped match would hand this sale to
+    // the wrong showroom's customer and create_sale would reject it.
+    const payload = JSON.stringify({
+      branch: brA.id,
+      customer: "",
+      phone: "01700000002",
+      cust_name: "Walk-in from the other branch",
+      nid: "",
+      items: [{ item_id: item.id, price: 13000 }],
+      discount: 0,
+      paid: 13000,
+      method: "cash",
+      sale_type: "cash",
+      months: "",
+      discount_reason: "",
+    });
+    await as(tx, U.salesA);
+    const applied = await tx`
+      select public.apply_offline_op(
+        ${ref}::uuid, 'sale', ${payload}::text::jsonb,
+        (now() - interval '1 day'), 'smoke-device', ${U.salesA}) as res`;
+    eq(
+      applied[0].res.status,
+      "applied",
+      `the offline sale to a foreign phone: ${applied[0].res.error}`,
+    );
+
+    await asDb(tx);
+    const [sale] = await tx`
+      select * from public.sales where id = ${applied[0].res.result.sale_id}`;
+    assert(sale.customer_id !== custB.id, "the replay gave the sale to another branch's customer");
+    const [customer] = await tx`
+      select * from public.customers where id = ${sale.customer_id}`;
+    eq(customer.branch_id, brA.id, "the branch the offline customer was written under");
+    eq(customer.name, "Walk-in from the other branch", "the name of the offline customer");
+  });
+
+  await step("an offline expense lands on the day it was written", async () => {
+    const ref = "11111111-2222-3333-4444-555555555577";
+    const threeDaysAgo = await dayText(-3);
+    const payload = JSON.stringify({
+      branch: brA.id,
+      category: "Cleaning",
+      amount: 400,
+      date: threeDaysAgo,
+      method: "cash",
+      note: "queued without internet",
+      attachment: "",
+      bill_no: "BILL-9",
+    });
+    await as(tx, U.manager);
+    const applied = await tx`
+      select public.apply_offline_op(
+        ${ref}::uuid, 'expense', ${payload}::text::jsonb,
+        (now() - interval '3 days'), 'smoke-device', ${U.manager}) as res`;
+    eq(applied[0].res.status, "applied", "the offline expense");
+
+    await asDb(tx);
+    const voucher = applied[0].res.result.expense_voucher;
+    const [expense] = await tx`select * from public.expenses where voucher_no = ${voucher}`;
+    assert(expense, "the offline expense was never written");
+    eq(expense.bill_no, "BILL-9", "the bill number of a queued expense");
+    eq(expense.created_by, U.manager, "the offline expense was credited to whoever synced");
+    const [onDay] = await tx`
+      select count(*)::int as n from public.expenses
+      where voucher_no = ${voucher} and expense_date = ${threeDaysAgo}::date`;
+    eq(onDay.n, 1, "the day a queued expense was written on");
+    assert(
+      new Date(expense.created_at).getTime() < Date.now() - 47 * 3600 * 1000,
+      `the queued expense landed on today: ${expense.created_at}`,
+    );
+    const [statement] = await tx`
+      select * from public.daily_cash_reconciliation(${brA.id}, ${threeDaysAgo})`;
+    assert(
+      Number(statement.cash_expenses) >= 400,
+      "a queued expense is missing from its own day's statement",
+    );
+    near(
+      statement.closing_cash,
+      Number(statement.opening_cash) +
+        Number(statement.cash_sales) +
+        Number(statement.cash_collections) +
+        Number(statement.cash_other_income) -
+        Number(statement.cash_expenses) -
+        Number(statement.cash_deposits),
+      "three days ago closes",
+    );
+  });
+
+  await step("an offline kisti keeps the wallet it was collected in", async () => {
+    const ref = "11111111-2222-3333-4444-555555555599";
+    await asDb(tx);
+    const [inst] = await tx`
+      select i.id, i.plan_id, i.amount - i.paid_amount as due
+      from public.installments i
+      where i.paid_amount < i.amount order by i.due_date limit 1`;
+    const amt = Math.min(1500, Number(inst.due));
+    const payload = JSON.stringify({ inst: inst.id, amount: amt, method: "nagad" });
+
+    await as(tx, U.salesA);
+    const applied = await tx`
+      select public.apply_offline_op(
+        ${ref}::uuid, 'kisti', ${payload}::text::jsonb,
+        (now() - interval '1 day'), 'smoke-device', ${U.salesA}) as res`;
+    eq(applied[0].res.status, "applied", "the queued kisti collection");
+
+    await asDb(tx);
+    const [booking] = await tx`
+      select count(*)::int as n from public.transactions
+      where category = 'Installment' and ref_id = ${inst.plan_id}
+        and amount = ${amt}::numeric and method = 'nagad'`;
+    eq(booking.n, 1, "the wallet a queued kisti was collected in");
+  });
+
+  await step("one account cannot empty another account's queue", async () => {
+    const ref = "11111111-2222-3333-4444-555555555588";
+    const item = await mintItem(brA.id);
+    const payload = JSON.parse(cart(item.id));
+    await as(tx, U.salesB);
+    const msg = await expectError(
+      tx,
+      "replay by the wrong account",
+      "apply_offline_op",
+      [ref, "sale", payload, new Date().toISOString(), "smoke-device", U.salesA],
+      "This queue belongs to another account",
+    );
+    assert(msg.includes("another account"), msg);
   });
 }
 

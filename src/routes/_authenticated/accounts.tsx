@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { BranchPicker, PageHeader } from "@/components/BranchPicker";
 import { PartnerAccounts } from "@/components/PartnerAccounts";
+import { DailyCash } from "@/components/DailyCash";
 import { taka, useBranches, useMe } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
 import { Card } from "@/components/ui/card";
@@ -21,23 +22,14 @@ import {
 import { fetchAllPages } from "@/lib/paginated-query";
 import { downloadCsv } from "@/lib/csv";
 import { localDayEndIso, localDayStartIso, localToday } from "@/lib/date";
+import { PAYMENT_METHODS, methodLabel } from "@/lib/payment-methods";
 
 export const Route = createFileRoute("/_authenticated/accounts")({
   head: () => ({ meta: [{ title: "Accounts — Dealer ERP" }] }),
   component: Accounts,
 });
 
-const METHODS = ["cash", "bank", "bkash", "nagad"] as const;
-const methodLabel = (m: string) =>
-  m === "cash"
-    ? "Cash"
-    : m === "bank"
-      ? "Bank"
-      : m === "bkash"
-        ? "bKash"
-        : m === "nagad"
-          ? "Nagad"
-          : m;
+const METHODS = PAYMENT_METHODS;
 
 const firstOfMonth = () => {
   const d = new Date();
@@ -76,6 +68,9 @@ function Accounts() {
     (me.canWriteHq ||
       (me.branch_id === branch &&
         me.roles.some((r) => ["branch_manager", "accountant"].includes(r))));
+  // Setting the till's opening or the close-of-day count is the same job as
+  // posting an income entry, so the same people may do it.
+  const canDailyCash = canAddIncome;
   const canPartner =
     !!me &&
     !!branch &&
@@ -228,6 +223,7 @@ function Accounts() {
           Export CSV
         </Button>
       </div>
+      {branch && branch !== "all" && <DailyCash branch={branch} canWrite={canDailyCash} />}
       <div className="mb-4 grid gap-4 sm:grid-cols-3">
         <Card className="p-5">
           <div className="text-xs uppercase text-muted-foreground">{t("Income")}</div>

@@ -7,6 +7,7 @@ import { BranchPicker, PageHeader } from "@/components/BranchPicker";
 import { ScanButton } from "@/components/BarcodeScanner";
 import { productLabel, taka, useBranches, useMe, useProducts } from "@/lib/erp";
 import { isValidImei } from "@/lib/imei";
+import { EXPENSE_METHODS, methodLabel } from "@/lib/payment-methods";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,8 +112,9 @@ function Receive({ branch }: { branch: string }) {
       const bIsNumber = b !== "" && Number.isFinite(Number(b));
       const imei2 = b === "" || bIsNumber ? "" : b;
       const costRaw = c !== "" ? c : bIsNumber ? b : "";
-      const cost = costRaw === "" ? Number(cost || 0) : Number(costRaw);
-      return { imei: a, imei2, cost };
+      // The default-cost field only fills lines that carry no cost of their own.
+      const unitCost = costRaw === "" ? Number(cost || 0) : Number(costRaw);
+      return { imei: a, imei2, cost: unitCost };
     });
   const bad = lines.filter((l) => !isValidImei(l.imei));
   const total = lines.reduce((s, l) => s + l.cost, 0);
@@ -251,8 +253,10 @@ function Receive({ branch }: { branch: string }) {
               value={method}
               onChange={(e) => setMethod(e.target.value)}
             >
-              {["cash", "bank", "bkash", "nagad"].map((m) => (
-                <option key={m}>{m}</option>
+              {EXPENSE_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {methodLabel(m)}
+                </option>
               ))}
             </select>
           </div>
@@ -520,8 +524,10 @@ function History({ branch }: { branch: string }) {
                 value={payMethod}
                 onChange={(e) => setPayMethod(e.target.value)}
               >
-                {["cash", "bank", "bkash", "nagad"].map((m) => (
-                  <option key={m}>{m}</option>
+                {EXPENSE_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {methodLabel(m)}
+                  </option>
                 ))}
               </select>
             </div>

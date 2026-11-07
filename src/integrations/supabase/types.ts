@@ -199,6 +199,50 @@ export type Database = {
           },
         ];
       };
+      daily_cash_records: {
+        Row: {
+          branch_id: string;
+          counted_cash: number | null;
+          created_at: string;
+          created_by: string | null;
+          day: string;
+          note: string | null;
+          opening_cash: number;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          branch_id: string;
+          counted_cash?: number | null;
+          created_at?: string;
+          created_by?: string | null;
+          day: string;
+          note?: string | null;
+          opening_cash?: number;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          branch_id?: string;
+          counted_cash?: number | null;
+          created_at?: string;
+          created_by?: string | null;
+          day?: string;
+          note?: string | null;
+          opening_cash?: number;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "daily_cash_records_branch_id_fkey";
+            columns: ["branch_id"];
+            isOneToOne: false;
+            referencedRelation: "branches";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       employees: {
         Row: {
           active: boolean;
@@ -297,8 +341,10 @@ export type Database = {
       expenses: {
         Row: {
           amount: number;
+          approved_at: string | null;
           approved_by: string | null;
           attachment_url: string | null;
+          bill_no: string | null;
           branch_id: string;
           category: string;
           created_at: string;
@@ -308,11 +354,14 @@ export type Database = {
           method: string;
           note: string | null;
           status: string;
+          voucher_no: string | null;
         };
         Insert: {
           amount: number;
+          approved_at?: string | null;
           approved_by?: string | null;
           attachment_url?: string | null;
+          bill_no?: string | null;
           branch_id: string;
           category: string;
           created_at?: string;
@@ -322,11 +371,14 @@ export type Database = {
           method?: string;
           note?: string | null;
           status?: string;
+          voucher_no?: string | null;
         };
         Update: {
           amount?: number;
+          approved_at?: string | null;
           approved_by?: string | null;
           attachment_url?: string | null;
+          bill_no?: string | null;
           branch_id?: string;
           category?: string;
           created_at?: string;
@@ -336,6 +388,7 @@ export type Database = {
           method?: string;
           note?: string | null;
           status?: string;
+          voucher_no?: string | null;
         };
         Relationships: [
           {
@@ -667,6 +720,79 @@ export type Database = {
             columns: ["product_id"];
             isOneToOne: false;
             referencedRelation: "products";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      inventory_movements: {
+        Row: {
+          branch_id: string;
+          created_by: string | null;
+          id: string;
+          imei: string;
+          item_id: string;
+          movement_type: string;
+          moved_at: string;
+          product_id: string;
+          qty: number;
+          reason: string | null;
+          ref_id: string | null;
+          ref_type: string | null;
+          source: string;
+          voucher_no: string | null;
+        };
+        Insert: {
+          branch_id: string;
+          created_by?: string | null;
+          id?: string;
+          imei: string;
+          item_id: string;
+          movement_type: string;
+          moved_at?: string;
+          product_id: string;
+          qty: number;
+          reason?: string | null;
+          ref_id?: string | null;
+          ref_type?: string | null;
+          source?: string;
+          voucher_no?: string | null;
+        };
+        Update: {
+          branch_id?: string;
+          created_by?: string | null;
+          id?: string;
+          imei?: string;
+          item_id?: string;
+          movement_type?: string;
+          moved_at?: string;
+          product_id?: string;
+          qty?: number;
+          reason?: string | null;
+          ref_id?: string | null;
+          ref_type?: string | null;
+          source?: string;
+          voucher_no?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "inventory_movements_item_id_fkey";
+            columns: ["item_id"];
+            isOneToOne: false;
+            referencedRelation: "inventory_items";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "inventory_movements_product_id_fkey";
+            columns: ["product_id"];
+            isOneToOne: false;
+            referencedRelation: "products";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "inventory_movements_branch_id_fkey";
+            columns: ["branch_id"];
+            isOneToOne: false;
+            referencedRelation: "branches";
             referencedColumns: ["id"];
           },
         ];
@@ -1226,6 +1352,10 @@ export type Database = {
         };
         Returns: string;
       };
+      adjust_inventory: {
+        Args: { _direction: string; _item: string; _reason: string };
+        Returns: string;
+      };
       admin_revoke_user_access: {
         Args: { _user: string };
         Returns: undefined;
@@ -1240,6 +1370,7 @@ export type Database = {
       };
       apply_offline_op: {
         Args: {
+          _actor?: string | null;
           _client_ref: string;
           _device: string;
           _kind: string;
@@ -1324,9 +1455,13 @@ export type Database = {
         Returns: boolean;
       };
       is_hq: { Args: { _uid: string }; Returns: boolean };
+      inventory_movement_context: {
+        Args: { _reason: string | null; _ref_type: string | null; _voucher: string | null };
+        Returns: undefined;
+      };
       mark_inventory_damaged: {
         Args: { _item: string; _reason: string };
-        Returns: undefined;
+        Returns: string;
       };
       partner_payment: {
         Args: {
@@ -1379,6 +1514,31 @@ export type Database = {
           oldest_due_date: string;
         }[];
       };
+      daily_cash_reconciliation: {
+        Args: { _branch: string | null; _day: string | null };
+        Returns: {
+          branch_id: string | null;
+          day: string;
+          opening_cash: number;
+          cash_sales: number;
+          bank_card_sales: number;
+          mfs_sales: number;
+          credit_sales: number;
+          collections: number;
+          cash_collections: number;
+          mfs_collections: number;
+          other_income: number;
+          cash_other_income: number;
+          expenses: number;
+          cash_expenses: number;
+          hq_deposits: number;
+          cash_deposits: number;
+          closing_cash: number;
+          counted_cash: number | null;
+          variance: number | null;
+          balanced: boolean;
+        }[];
+      };
       kisti_ageing: {
         Args: { _branch: string | null };
         Returns: { bucket: string; cnt: number; total: number }[];
@@ -1408,6 +1568,48 @@ export type Database = {
           retail_value: number;
         }[];
       };
+      stock_imei_ledger: {
+        Args: { _branch: string | null; _from: string | null; _to: string | null };
+        Returns: {
+          branch_id: string;
+          imei: string;
+          imei2: string | null;
+          brand: string;
+          model: string;
+          variant: string | null;
+          movement_type: string;
+          qty: number;
+          voucher_no: string | null;
+          reason: string | null;
+          ref_type: string | null;
+          ref_id: string | null;
+          moved_at: string;
+          status: string;
+        }[];
+      };
+      stock_reconciliation: {
+        Args: { _branch: string | null; _from: string | null; _to: string | null };
+        Returns: {
+          branch_id: string;
+          product_id: string;
+          brand: string;
+          model: string;
+          variant: string | null;
+          opening: number;
+          receive: number;
+          transfer_in: number;
+          transfer_out: number;
+          sales: number;
+          sales_return: number;
+          purchase_return: number;
+          damage: number;
+          damage_restore: number;
+          adjustment: number;
+          closing: number;
+          on_shelf: number;
+          matches: boolean;
+        }[];
+      };
       restore_damaged_inventory: {
         Args: { _item: string; _reason: string };
         Returns: undefined;
@@ -1416,14 +1618,33 @@ export type Database = {
         Args: { _reason: string; _transaction: string };
         Returns: undefined;
       };
+      record_hq_deposit: {
+        Args: { _amount: number; _branch: string; _method: string; _note: string };
+        Returns: string;
+      };
+      save_daily_cash_opening: {
+        Args: {
+          _branch: string;
+          _counted: number | null;
+          _day: string | null;
+          _note: string | null;
+          _opening: number | null;
+        };
+        Returns: undefined;
+      };
       settle_finance: {
         Args: { _case: string; _received: number };
         Returns: undefined;
+      };
+      take_inventory_movement_context: {
+        Args: Record<string, never>;
+        Returns: Json;
       };
       submit_expense: {
         Args: {
           _amount: number;
           _attachment: string;
+          _bill_no?: string | null;
           _branch: string;
           _category: string;
           _date: string;
@@ -1436,6 +1657,7 @@ export type Database = {
         Args: {
           _amount: number;
           _attachment: string;
+          _bill_no?: string | null;
           _category: string;
           _date: string;
           _expense: string;

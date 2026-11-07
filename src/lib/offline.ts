@@ -162,6 +162,10 @@ export async function syncNow(): Promise<{ applied: number; conflicts: number }>
         _payload: op.payload as never,
         _queued_at: op.queued_at,
         _device: deviceName(),
+        // The server books the replayed document under this id and under the
+        // queued_at date, so a sale made on Monday stays in Monday's book even
+        // if the shop only got internet on Wednesday.
+        _actor: op.user_id ?? uid,
       });
       if (error) {
         if (isNetworkError(error)) break;

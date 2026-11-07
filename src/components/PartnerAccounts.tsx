@@ -16,17 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
-
-const methodLabel = (m: string) =>
-  m === "cash"
-    ? "Cash"
-    : m === "bank"
-      ? "Bank"
-      : m === "bkash"
-        ? "bKash"
-        : m === "nagad"
-          ? "Nagad"
-          : m;
+import { EXPENSE_METHODS, methodLabel } from "@/lib/payment-methods";
 
 /** Partner balance: what the partner still owes the showroom. */
 export function partnerBalance(
@@ -157,8 +147,10 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
               value={f.method}
               onChange={(e) => setF({ ...f, method: e.target.value })}
             >
-              {["cash", "bank", "bkash", "nagad"].map((m) => (
-                <option key={m}>{m}</option>
+              {EXPENSE_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {methodLabel(m)}
+                </option>
               ))}
             </select>
           </div>

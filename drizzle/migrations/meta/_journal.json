@@ -162,6 +162,41 @@
       "when": 1793750400000,
       "tag": "0022_reversal_and_income_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793836800000,
+      "tag": "0023_payment_methods",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793923200000,
+      "tag": "0024_daily_cash_statement",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794009600000,
+      "tag": "0025_inventory_movements",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794096000000,
+      "tag": "0026_expense_book",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794182400000,
+      "tag": "0027_offline_attribution",
+      "breakpoints": true
     }
   ]
 }

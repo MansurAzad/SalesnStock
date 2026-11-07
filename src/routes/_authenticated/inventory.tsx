@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { BranchPicker, PageHeader } from "@/components/BranchPicker";
@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/table";
 import { ScanButton } from "@/components/BarcodeScanner";
 import { isValidImei } from "@/lib/imei";
+import { EXPENSE_METHODS, methodLabel } from "@/lib/payment-methods";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchAllPages } from "@/lib/paginated-query";
 
@@ -90,7 +91,7 @@ function Inventory() {
         : "Why is this item being restored to stock?",
     );
     if (!reason?.trim()) return;
-    const { error } = await supabase.rpc(
+    const { data: voucher, error } = await supabase.rpc(
       damaged ? "mark_inventory_damaged" : "restore_damaged_inventory",
       { _item: id, _reason: reason.trim() },
     );
@@ -98,7 +99,29 @@ function Inventory() {
       toast.error(error.message);
       return;
     }
-    toast.success(damaged ? "Item marked damaged" : "Item restored to stock");
+    // The damage functions hand back the voucher they issued, which is what
+    // goes on the paper the shopkeeper keeps.
+    toast.success(`${damaged ? "Damage" : "Restore"} voucher ${voucher} recorded`);
+    qc.invalidateQueries({ queryKey: ["inventory"] });
+  }
+
+  async function adjustStock(id: string, direction: "add" | "remove") {
+    const reason = window.prompt(
+      direction === "remove"
+        ? "Why is this phone written off the shelf?"
+        : "Why is this phone being added back to stock?",
+    );
+    if (!reason?.trim()) return;
+    const { data: voucher, error } = await supabase.rpc("adjust_inventory", {
+      _item: id,
+      _direction: direction,
+      _reason: reason.trim(),
+    });
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success(`Adjustment voucher ${voucher} recorded`);
     qc.invalidateQueries({ queryKey: ["inventory"] });
   }
 
@@ -177,23 +200,44 @@ function Inventory() {
                     </TableCell>
                     {canManageStock(i.branch_id) && (
                       <TableCell className="text-right">
-                        {i.status === "in_stock" ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setDamageStatus(i.id, true)}
-                          >
-                            Mark damaged
-                          </Button>
-                        ) : i.status === "damaged" ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setDamageStatus(i.id, false)}
-                          >
-                            Restore
-                          </Button>
-                        ) : null}
+                        <div className="flex justify-end gap-1">
+                          {i.status === "in_stock" && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setDamageStatus(i.id, true)}
+                              >
+                                Mark damaged
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => adjustStock(i.id, "remove")}
+                              >
+                                Write off
+                              </Button>
+                            </>
+                          )}
+                          {i.status === "damaged" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setDamageStatus(i.id, false)}
+                            >
+                              Restore
+                            </Button>
+                          )}
+                          {i.status === "returned" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => adjustStock(i.id, "add")}
+                            >
+                              Add back to stock
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     )}
                   </TableRow>
@@ -510,7 +554,7 @@ function ProductsTab({ canEdit }: { canEdit: boolean }) {
   );
 }
 
-function AddStock({ fixedBranchId }: { fixedBranchId?: string }) {
+function AddStock({ fixedBranchId }: { fixedBranchId?: string | undefined }) {
   const { t } = useT();
   const qc = useQueryClient();
   const { data: products = [] } = useProducts();
@@ -695,9 +739,9 @@ function AddStock({ fixedBranchId }: { fixedBranchId?: string }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {["cash", "bank", "bkash", "nagad", "cheque", "online"].map((m) => (
+                  {EXPENSE_METHODS.map((m) => (
                     <SelectItem key={m} value={m}>
-                      {m}
+                      {methodLabel(m)}
                     </SelectItem>
                   ))}
                 </SelectContent>

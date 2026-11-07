@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
 import { localToday } from "@/lib/date";
+import { COLLECTION_METHODS, methodLabel } from "@/lib/payment-methods";
 import { enqueue, isNetworkError } from "@/lib/offline";
 
 export const Route = createFileRoute("/_authenticated/customers_/$customerId")({
@@ -37,6 +38,9 @@ function CustomerDetail() {
   const [notes, setNotes] = useState<string | null>(null);
   const [savingNotes, setSavingNotes] = useState(false);
   const [collectAmounts, setCollectAmounts] = useState<Record<string, string>>({});
+  // The day book splits the drawer from the wallet, so a collection has to say
+  // which one the money arrived in.
+  const [collectMethods, setCollectMethods] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
   const { data, error } = useQuery({
@@ -103,7 +107,7 @@ function CustomerDetail() {
       (me.branch_id === customer.branch_id &&
         me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
 
-  async function collect(installmentId: string, amount: number) {
+  async function collect(installmentId: string, amount: number, method: string) {
     if (!(amount > 0)) {
       toast.error("Enter an amount greater than zero");
       return;
@@ -111,7 +115,12 @@ function CustomerDetail() {
     if (busy) return;
     setBusy(true);
     const offline = async () => {
-      await enqueue("kisti", { inst: installmentId, amount }, `Kisti ${taka(amount)}`, me?.id);
+      await enqueue(
+        "kisti",
+        { inst: installmentId, amount, method },
+        `Kisti ${taka(amount)}`,
+        me?.id,
+      );
       toast.success("Offline — collection saved and will sync when internet returns");
     };
     try {
@@ -122,6 +131,7 @@ function CustomerDetail() {
       const { error: e } = await supabase.rpc("pay_installment", {
         _inst: installmentId,
         _amount: amount,
+        _method: method,
       });
       if (e && isNetworkError(e)) {
         await offline();
@@ -362,6 +372,34 @@ function CustomerDetail() {
                       <div className="flex items-center justify-end gap-2">
                         {due > 0 && !i.cancelled && canEdit && (
                           <>
+                            <select
+                              aria-label={`How kisti ${i.seq} was paid`}
+                              className="h-8 w-24 rounded-md border bg-background px-1 text-sm"
+                              value={collectMethods[i.id] ?? "cash"}
+                              onChange={(e) =>
+                                setCollectMethods((prev) => ({ ...prev, [i.id]: e.target.value }))
+                              }
+                            >
+                              {COLLECTION_METHODS.map((m) => (
+                                <option key={m} value={m}>
+                                  {methodLabel(m)}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              aria-label={`How kisti ${i.seq} was paid`}
+                              className="h-8 w-24 rounded-md border bg-background px-1 text-sm"
+                              value={collectMethods[i.id] ?? "cash"}
+                              onChange={(e) =>
+                                setCollectMethods((prev) => ({ ...prev, [i.id]: e.target.value }))
+                              }
+                            >
+                              {COLLECTION_METHODS.map((m) => (
+                                <option key={m} value={m}>
+                                  {methodLabel(m)}
+                                </option>
+                              ))}
+                            </select>
                             <Input
                               type="number"
                               className="h-8 w-24"
@@ -389,7 +427,11 @@ function CustomerDetail() {
                                   toast.error("Enter an amount greater than zero");
                                   return;
                                 }
-                                void collect(i.id, Math.min(typed, due));
+                                void collect(
+                                  i.id,
+                                  Math.min(typed, due),
+                                  collectMethods[i.id] ?? "cash",
+                                );
                               }}
                             >
                               {t("Pay")}

@@ -21,6 +21,7 @@ import {
 import { X } from "lucide-react";
 import { ScanButton } from "@/components/BarcodeScanner";
 import { matchesImei } from "@/lib/imei";
+import { SALE_METHODS, methodLabel } from "@/lib/payment-methods";
 import { fetchAllPages } from "@/lib/paginated-query";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 
@@ -407,9 +408,9 @@ function POS() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {["cash", "bkash", "nagad", "card", "bank"].map((m) => (
-                    <SelectItem key={m} value={m} className="capitalize">
-                      {m}
+                  {SALE_METHODS.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {methodLabel(m)}
                     </SelectItem>
                   ))}
                 </SelectContent>
