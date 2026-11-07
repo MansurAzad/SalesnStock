@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createOpenAI } from "@ai-sdk/openai";
 import { streamText } from "ai";
 import type { Database } from "@/integrations/supabase/types";
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "@/integrations/supabase/config";
 import { dhakaDate } from "@/lib/date";
 
 const RUN = "X-Lovable-AIG-Run-ID";
@@ -13,9 +14,7 @@ export const Route = createFileRoute("/api/insights")({
       POST: async ({ request }) => {
         const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
         if (!token) return new Response("Sign in required", { status: 401 });
-        const url = process.env["SUPABASE_URL"]!;
-        const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
-        const sb = createClient<Database>(url, key, {
+        const sb = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
           auth: { persistSession: false, autoRefreshToken: false },
           global: { headers: { Authorization: `Bearer ${token}` } },
         });

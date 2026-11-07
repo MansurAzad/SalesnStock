@@ -15,6 +15,7 @@ import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { LangProvider } from "@/lib/i18n";
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_PROJECT_ID } from "@/integrations/supabase/config";
 import { registerOfflineShell } from "@/lib/sw-register";
 
 import appCss from "../styles.css?url";
@@ -150,7 +151,7 @@ const persister = createAsyncStoragePersister({
           setItem: (k: string, v: string) => idbSet(k, v),
           removeItem: (k: string) => idbDel(k),
         },
-  key: "erp-query-cache",
+  key: `erp-query-cache:${SUPABASE_PROJECT_ID}`,
 });
 
 function RootComponent() {
@@ -166,7 +167,7 @@ function RootComponent() {
       if (event === "SIGNED_OUT") {
         // Never restore the previous user's cached data on this device.
         queryClient.clear();
-        void idbDel("erp-query-cache");
+        void idbDel(`erp-query-cache:${SUPABASE_PROJECT_ID}`);
         // The offline queue is kept: it holds sales that have not reached the
         // server yet, and every entry carries the user who made it, so the next
         // cashier on this device neither sees nor syncs them.

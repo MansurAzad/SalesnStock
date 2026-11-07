@@ -9,6 +9,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { del as idbDel } from "idb-keyval";
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_PROJECT_ID } from "@/integrations/supabase/config";
 import { useMe, roleLabel, useSettings } from "@/lib/erp";
 import { useT } from "@/lib/i18n";
 import {
@@ -89,7 +90,7 @@ function Layout() {
     // The query cache is persisted to IndexedDB — drop it too, otherwise the
     // next user on this device could see the previous user's data.
     try {
-      await idbDel("erp-query-cache");
+      await idbDel(`erp-query-cache:${SUPABASE_PROJECT_ID}`);
     } catch {
       /* nothing persisted */
     }

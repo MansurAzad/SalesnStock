@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { get, set } from "idb-keyval";
 import { supabase } from "@/integrations/supabase/client";
+import { SUPABASE_PROJECT_ID } from "@/integrations/supabase/config";
 
 /**
  * Offline outbox: sales, kisti collections and expenses made without internet are
@@ -25,7 +26,8 @@ export type OutboxOp = {
   error?: string | undefined;
 };
 
-const KEY = "erp-outbox";
+// Do not replay an older backend's queued transactions into this project.
+const KEY = `erp-outbox:${SUPABASE_PROJECT_ID}`;
 let ops: OutboxOp[] = [];
 let loaded = false;
 let loadPromise: Promise<void> | null = null;
