@@ -1491,13 +1491,14 @@ export type Database = {
         Args: {
           _branch: string;
           _employee_ids: string[];
+          _method: string;
           _note: string;
           _period: string;
         };
         Returns: number;
       };
       return_sale: {
-        Args: { _reason: string; _sale: string };
+        Args: { _method: string; _reason: string; _sale: string };
         Returns: undefined;
       };
       customer_dues: {
@@ -1633,7 +1634,7 @@ export type Database = {
         Returns: undefined;
       };
       settle_finance: {
-        Args: { _case: string; _received: number };
+        Args: { _case: string; _method: string; _received: number };
         Returns: undefined;
       };
       take_inventory_movement_context: {

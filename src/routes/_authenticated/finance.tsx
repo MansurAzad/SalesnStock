@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { PAYMENT_METHODS } from "@/lib/payment-methods";
 
 export const Route = createFileRoute("/_authenticated/finance")({
   head: () => ({
@@ -118,7 +119,18 @@ function Finance() {
       toast.error("Enter an amount greater than zero");
       return;
     }
-    const { error } = await supabase.rpc("settle_finance", { _case: id, _received: received });
+    const m = prompt(`Method the partner paid in (${PAYMENT_METHODS.join(", ")})`, "cash");
+    if (m === null) return;
+    const method = m.trim().toLowerCase();
+    if (!(PAYMENT_METHODS as readonly string[]).includes(method)) {
+      toast.error("Unknown payment method");
+      return;
+    }
+    const { error } = await supabase.rpc("settle_finance", {
+      _case: id,
+      _received: received,
+      _method: method,
+    });
     if (error) {
       toast.error(error.message);
       return;

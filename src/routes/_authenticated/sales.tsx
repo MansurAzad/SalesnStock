@@ -27,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { PAYMENT_METHODS } from "@/lib/payment-methods";
 
 export const Route = createFileRoute("/_authenticated/sales")({
   head: () => ({ meta: [{ title: "Sales — Dealer ERP" }] }),
@@ -66,12 +67,23 @@ function Sales() {
   const canReturn = (s: { branch_id: string }) =>
     !!me &&
     (me.canWriteHq || (me.branch_id === s.branch_id && me.roles.includes("branch_manager")));
-  async function doReturn(id: string, inv: string) {
+  async function doReturn(id: string, inv: string, saleMethod: string) {
     const reason = window.prompt(
       `Return sale ${inv}? Stock goes back and a refund is recorded. Reason:`,
     );
     if (!reason?.trim()) return;
-    const { error } = await supabase.rpc("return_sale", { _sale: id, _reason: reason.trim() });
+    const m = window.prompt(`Refund method (${PAYMENT_METHODS.join(", ")})`, saleMethod || "cash");
+    if (m === null) return;
+    const method = m.trim().toLowerCase();
+    if (!(PAYMENT_METHODS as readonly string[]).includes(method)) {
+      toast.error("Unknown payment method");
+      return;
+    }
+    const { error } = await supabase.rpc("return_sale", {
+      _sale: id,
+      _reason: reason.trim(),
+      _method: method,
+    });
     if (error) {
       toast.error(error.message);
       return;
@@ -229,7 +241,7 @@ function Sales() {
                   {canReturn(s) && s.status !== "returned" && (
                     <button
                       className="ml-3 text-sm text-destructive"
-                      onClick={() => doReturn(s.id, s.invoice_no)}
+                      onClick={() => doReturn(s.id, s.invoice_no, s.payment_method)}
                     >
                       Return
                     </button>

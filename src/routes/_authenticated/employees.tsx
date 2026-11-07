@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { fetchAllPages } from "@/lib/paginated-query";
+import { EXPENSE_METHODS, methodLabel } from "@/lib/payment-methods";
 
 export const Route = createFileRoute("/_authenticated/employees")({
   head: () => ({
@@ -742,6 +743,7 @@ function RunPayrollDialog({
   const qc = useQueryClient();
   const [picked, setPicked] = useState<string[]>([]);
   const [note, setNote] = useState("");
+  const [method, setMethod] = useState("cash");
   const [busy, setBusy] = useState(false);
   const staff = emps.filter((e) => e.active && e.branch_id === branchId);
   const total = staff.reduce((sum, e) => (picked.includes(e.id) ? sum + Number(e.salary) : sum), 0);
@@ -754,6 +756,7 @@ function RunPayrollDialog({
       _period: month,
       _employee_ids: picked,
       _note: note.trim(),
+      _method: method,
     });
     setBusy(false);
     if (error) {
@@ -827,14 +830,31 @@ function RunPayrollDialog({
             </TableBody>
           </Table>
         </div>
-        <div className="space-y-1">
-          <Label htmlFor="payroll-note">Note</Label>
-          <Input
-            id="payroll-note"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder={`Salary for ${month}`}
-          />
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor="payroll-note">Note</Label>
+            <Input
+              id="payroll-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={`Salary for ${month}`}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="payroll-method">Paid from</Label>
+            <select
+              id="payroll-method"
+              className="w-full rounded-md border bg-background px-2 py-2"
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+            >
+              {EXPENSE_METHODS.map((m) => (
+                <option key={m} value={m}>
+                  {methodLabel(m)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">{picked.length} staff selected</span>

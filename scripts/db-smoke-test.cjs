@@ -774,6 +774,45 @@ async function runAll(tx) {
     eq(refund.category, "Sale refund", "the refund category");
   });
 
+  await step("a refund keeps the sale's method unless another is chosen", async () => {
+    const itemA = await mintItem(brA.id);
+    const itemB = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    const saleA = (
+      await tx`
+        select public.create_sale(${brA.id}, ${custA.id}, ${cart(itemA.id)}::text::jsonb, 0, 12000, 'bkash', 'cash', null, null) as id`
+    )[0].id;
+    const saleB = (
+      await tx`
+        select public.create_sale(${brA.id}, ${custA.id}, ${cart(itemB.id)}::text::jsonb, 0, 12000, 'bkash', 'cash', null, null) as id`
+    )[0].id;
+    await as(tx, U.manager);
+    await tx`select public.return_sale(${saleA}, 'default method')`;
+    await tx`select public.return_sale(${saleB}, 'paid back from the till', 'cash')`;
+    await asDb(tx);
+    const [refundA] = await tx`
+      select * from public.transactions where ref_id = ${saleA} and category = 'Sale refund'`;
+    eq(refundA.method, "bkash", "a refund without a choice keeps the sale's method");
+    const [refundB] = await tx`
+      select * from public.transactions where ref_id = ${saleB} and category = 'Sale refund'`;
+    eq(refundB.method, "cash", "a wallet sale can be refunded in cash from the till");
+    await as(tx, U.manager);
+    const itemC = await mintItem(brA.id);
+    await as(tx, U.salesA);
+    const saleC = (
+      await tx`
+        select public.create_sale(${brA.id}, ${custA.id}, ${cart(itemC.id)}::text::jsonb, 0, 12000, 'cash', 'cash', null, null) as id`
+    )[0].id;
+    await as(tx, U.manager);
+    await expectError(
+      tx,
+      "refund in an unknown method",
+      "return_sale",
+      [saleC, "bad method", "crypto"],
+      "Unknown payment method",
+    );
+  });
+
   await step("a sale cannot be returned twice", async () => {
     await as(tx, U.manager);
     await expectError(
@@ -1121,6 +1160,30 @@ async function runAll(tx) {
     );
   });
 
+  await step("a settlement can arrive in the bank instead of the drawer", async () => {
+    await as(tx, U.salesA);
+    const rows = await tx`
+      select public.create_finance_case(${brA.id}, ${partner.id}, 'Financed Customer 3', '01733333333',
+        'REF-3', 8000, 'phone on EMI', null) as id`;
+    const caseId = rows[0].id;
+    await tx`select public.settle_finance(${caseId}, 7500, 'bank')`;
+    await asDb(tx);
+    const [entry] = await tx`select * from public.transactions where ref_id = ${caseId}`;
+    eq(entry.method, "bank", "the method the partner paid in");
+    near(entry.amount, 7500, "the bank settlement amount");
+    await as(tx, U.salesA);
+    const bad = await tx`
+      select public.create_finance_case(${brA.id}, ${partner.id}, 'Financed Customer 4', '01744444444',
+        'REF-4', 4000, 'phone on EMI', null) as id`;
+    await expectError(
+      tx,
+      "settlement in an unknown method",
+      "settle_finance",
+      [bad[0].id, 100, "crypto"],
+      "Unknown payment method",
+    );
+  });
+
   await step("a partner payment lands in both the ledger and the cash book", async () => {
     await as(tx, U.salesA);
     await tx`select public.partner_payment(${partner.id}, ${brA.id}, 'paid', 5000, 'cash', 'advance')`;
@@ -1240,6 +1303,28 @@ async function runAll(tx) {
     const [entry] = await tx`
       select * from public.transactions where category = 'Staff salary' order by created_at desc limit 1`;
     near(entry.amount, 30000, "the salary transaction");
+  });
+
+  await step("payroll can be paid from a wallet instead of the drawer", async () => {
+    await as(tx, U.manager);
+    const rows = await tx`
+      select public.run_payroll(${brA.id}, '2027-01', ${[staff[0].id]}::uuid[], 'January', 'bkash') as total`;
+    near(rows[0].total, 10000, "the wallet payroll total");
+    await asDb(tx);
+    const [entry] = await tx`
+      select * from public.transactions where category = 'Staff salary' and note like 'Payroll 2027-01%'`;
+    eq(entry.method, "bkash", "the wallet the salary left in");
+    const [expense] = await tx`
+      select * from public.expenses where id = ${entry.ref_id}`;
+    eq(expense.method, "bkash", "the expense book agrees with the cash book");
+    await as(tx, U.manager);
+    await expectError(
+      tx,
+      "payroll in an unknown method",
+      "run_payroll",
+      [brA.id, "2027-02", [staff[0].id], "", "crypto"],
+      "Unknown payment method",
+    );
   });
 
   await step("the same period cannot be paid twice", async () => {
@@ -1747,15 +1832,44 @@ async function runAll(tx) {
     eq(short.balanced, false, "a short drawer is not balanced");
   });
 
-  await step("an unwritten day carries the last opening balance forward", async () => {
-    const tomorrow = await dayText(1);
+  await step("an unwritten day carries the counted drawer forward", async () => {
     await as(tx, U.accountant);
+    const today = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    const tomorrow = await dayText(1);
     const row = (
       await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${tomorrow})`
     )[0];
-    near(row.opening_cash, 5000, "the carried forward opening");
-    near(row.closing_cash, 5000, "a quiet day keeps the cash it started with");
+    near(row.opening_cash, Number(today.counted_cash), "the carried forward closing drawer");
+    near(
+      row.closing_cash,
+      Number(today.counted_cash),
+      "a quiet day keeps the cash it started with",
+    );
     assert(row.counted_cash === null, "an unwritten day has no count");
+  });
+
+  await step("cash movements on the days in between carry forward too", async () => {
+    const tomorrow = await dayText(1);
+    const dayAfter = await dayText(2);
+    await asDb(tx);
+    await tx`
+      insert into public.transactions (branch_id, kind, category, amount, note, method, created_at)
+      values (${brA.id}, 'income', 'Service charge', 1000, 'smoke carry', 'cash',
+              (${tomorrow}::date + time '10:00') at time zone 'Asia/Dhaka')`;
+    await as(tx, U.accountant);
+    const today = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${cashToday})`
+    )[0];
+    const row = (
+      await tx`select * from public.daily_cash_reconciliation(${brA.id}, ${dayAfter})`
+    )[0];
+    near(
+      row.opening_cash,
+      Number(today.counted_cash) + 1000,
+      "the counted drawer plus the unwritten day's cash income",
+    );
   });
 
   await step("the cash day is guarded by the same people as the cash book", async () => {
@@ -1774,6 +1888,7 @@ async function runAll(tx) {
       [brB.id, 1000, "cash", "no"],
       "Not allowed for this branch",
     );
+    await as(tx, U.manager);
     await expectError(
       tx,
       "empty deposit",
@@ -1795,6 +1910,27 @@ async function runAll(tx) {
       "daily_cash_reconciliation",
       [brA.id, cashToday],
       "Not allowed for this branch",
+    );
+  });
+
+  await step("a salesman cannot reverse an entry or book an HQ deposit", async () => {
+    await as(tx, U.accountant);
+    const rows = await tx`
+      select public.add_manual_income(${brA.id}, 'Service charge', 300, 'to reverse', 'cash') as id`;
+    await as(tx, U.salesA);
+    await expectError(
+      tx,
+      "salesman reversal",
+      "reverse_manual_transaction",
+      [rows[0].id, "no"],
+      "Only an accountant, branch manager or admin can reverse an entry",
+    );
+    await expectError(
+      tx,
+      "salesman deposit",
+      "record_hq_deposit",
+      [brA.id, 100, "cash", "no"],
+      "Only an accountant, branch manager or admin can record an HQ deposit",
     );
   });
 
