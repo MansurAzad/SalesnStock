@@ -40,7 +40,7 @@ const BN: Record<string, string> = {
   "Date & time": "তারিখ ও সময়",
   Type: "ধরন",
   "Cash sale": "নগদ বিক্রয়",
-  "Kisti (installment)": "পার্টনার ফাইন্যান্স বিক্রয়",
+  "Partner-financed sale": "পার্টনার ফাইন্যান্স বিক্রয়",
   Customer: "ক্রেতা",
   Phone: "ফোন",
   NID: "এনআইডি",
@@ -171,7 +171,7 @@ function ReceiptPage() {
           <b>{T("Invoice no")}:</b> {sale.invoice_no}
         </div>
         <div>
-          <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Kisti (installment)")} · {sale.payment_method}
+          <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Partner-financed sale")} · {sale.payment_method}
         </div>
         {financeCase?.finance_partners?.name && (
           <div>
