@@ -32,7 +32,7 @@ ALTER TABLE public.finance_cases
 ALTER TABLE public.sales
   ADD COLUMN IF NOT EXISTS down_payment_discount numeric NOT NULL DEFAULT 0;
 
-DO $
+DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -43,7 +43,7 @@ BEGIN
       ADD CONSTRAINT chk_sales_down_payment_discount CHECK (down_payment_discount >= 0);
   END IF;
 END;
-$;
+$$;
 
 CREATE OR REPLACE FUNCTION public.create_partner_financed_sale(
   _branch uuid,
