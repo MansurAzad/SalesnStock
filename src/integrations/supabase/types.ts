@@ -411,6 +411,7 @@ export type Database = {
           customer_phone: string | null;
           id: string;
           note: string | null;
+          payer_name: string | null;
           partner_id: string;
           ref_no: string | null;
           sale_id: string | null;
@@ -427,6 +428,7 @@ export type Database = {
           customer_phone?: string | null;
           id?: string;
           note?: string | null;
+          payer_name?: string | null;
           partner_id: string;
           ref_no?: string | null;
           sale_id?: string | null;
