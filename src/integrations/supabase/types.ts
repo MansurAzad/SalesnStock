@@ -1091,6 +1091,7 @@ export type Database = {
           created_at: string;
           created_by: string | null;
           customer_id: string | null;
+          down_payment_discount: number;
           discount: number;
           discount_approved_by: string | null;
           discount_reason: string | null;
@@ -1111,6 +1112,7 @@ export type Database = {
           created_at?: string;
           created_by?: string | null;
           customer_id?: string | null;
+          down_payment_discount?: number;
           discount?: number;
           discount_approved_by?: string | null;
           discount_reason?: string | null;
@@ -1131,6 +1133,7 @@ export type Database = {
           created_at?: string;
           created_by?: string | null;
           customer_id?: string | null;
+          down_payment_discount?: number;
           discount?: number;
           discount_approved_by?: string | null;
           discount_reason?: string | null;
