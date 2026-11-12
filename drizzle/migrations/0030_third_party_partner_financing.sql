@@ -177,41 +177,30 @@ $$;
 REVOKE ALL ON FUNCTION public.create_partner_financed_sale(uuid, uuid, jsonb, numeric, numeric, text, uuid, text, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.create_partner_financed_sale(uuid, uuid, jsonb, numeric, numeric, text, uuid, text, text, text) TO authenticated;
 
--- This business model never sends money to a financing partner.
+-- All partner receipts must settle a linked finance case. A free-standing
+-- receipt would reduce the aggregate partner balance while leaving the case
+-- pending, producing contradictory Finance and Partner Accounts screens.
+-- Keep this legacy RPC as a clear, safe rejection for old clients.
 CREATE OR REPLACE FUNCTION public.partner_payment(
   _partner uuid, _branch uuid, _kind text, _amount numeric, _method text, _note text
 ) RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
-AS $$
+AS $
 BEGIN
   IF NOT public.can_operate_branch(auth.uid(), _branch) THEN
     RAISE EXCEPTION 'Not allowed for this branch';
   END IF;
-  IF _kind <> 'received' THEN
+  IF _kind = 'paid' THEN
     RAISE EXCEPTION 'Outgoing payments to financial partners are disabled for this business model';
-  END IF;
-  IF _amount IS NULL OR _amount <= 0 THEN RAISE EXCEPTION 'Amount must be positive'; END IF;
-  IF NOT EXISTS (SELECT 1 FROM public.finance_partners WHERE id = _partner) THEN
-    RAISE EXCEPTION 'Partner not found';
+  ELSIF _kind <> 'received' THEN
+    RAISE EXCEPTION 'Invalid partner payment direction';
   END IF;
 
-  INSERT INTO public.finance_partner_ledger(partner_id, branch_id, kind, amount, method, note, created_by)
-  VALUES (_partner, _branch, 'received', _amount, coalesce(_method, 'bank'), _note, auth.uid());
-
-  INSERT INTO public.transactions(branch_id, kind, category, amount, note, ref_id, method, created_by)
-  SELECT _branch, 'income', 'Finance partner receipt', _amount,
-         p.name || coalesce(' — ' || nullif(_note, ''), ''),
-         _partner, coalesce(_method, 'bank'), auth.uid()
-  FROM public.finance_partners p WHERE p.id = _partner;
-
-  INSERT INTO public.audit_logs(user_id, action, details)
-  VALUES (auth.uid(), 'partner_received', jsonb_build_object(
-    'partner', _partner, 'branch', _branch, 'amount', _amount
-  ));
+  RAISE EXCEPTION 'Direct partner receipts are disabled; settle the linked finance case in Finance';
 END;
-$$;
+$;
 
 REVOKE ALL ON FUNCTION public.partner_payment(uuid, uuid, text, numeric, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.partner_payment(uuid, uuid, text, numeric, text, text) TO authenticated;
