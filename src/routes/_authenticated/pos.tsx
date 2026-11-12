@@ -24,6 +24,7 @@ import { matchesImei } from "@/lib/imei";
 import { SALE_METHODS, methodLabel } from "@/lib/payment-methods";
 import { fetchAllPages } from "@/lib/paginated-query";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { calculatePartnerFinancing } from "@/lib/partner-financing";
 
 export const Route = createFileRoute("/_authenticated/pos")({
   head: () => ({ meta: [{ title: "POS — Dealer ERP" }] }),
@@ -124,7 +125,11 @@ function POS() {
   const cartCost = cart.reduce((a, c) => a + c.cost, 0);
   const baseDownPayment = saleType === "installment" ? Math.min(Math.max(num(down), 0), subtotal) : 0;
   const discountAmount = Math.min(Math.max(num(discount), 0), saleType === "installment" ? baseDownPayment : subtotal);
-  const total = Math.max(0, subtotal - discountAmount);
+  const partnerAmounts =
+    saleType === "installment" && baseDownPayment > 0 && baseDownPayment < subtotal
+      ? calculatePartnerFinancing(subtotal, baseDownPayment, discountAmount)
+      : null;
+  const total = partnerAmounts?.netSaleTotal ?? Math.max(0, subtotal - discountAmount);
   // The server measures the discount against the catalogue price, so an edited line price
   // counts as a discount too and needs a reason.
   const effectiveDiscount = Math.max(listSubtotal - total, 0);
@@ -137,8 +142,12 @@ function POS() {
   const needsApproval = effectiveDiscount > discountLimit || belowCost;
   const canApprove =
     !!me && (me.canWriteHq || (me.branch_id === branch && me.roles.includes("branch_manager")));
-  const downPayment = saleType === "installment" ? baseDownPayment - discountAmount : 0;
-  const financed = saleType === "installment" ? subtotal - baseDownPayment : 0;
+  const downPayment =
+    partnerAmounts?.customerDownPayment ??
+    (saleType === "installment" ? baseDownPayment - discountAmount : 0);
+  const financed =
+    partnerAmounts?.partnerReceivable ??
+    (saleType === "installment" ? Math.max(0, subtotal - baseDownPayment) : 0);
 
   function add(imei: string) {
     const it = stock.find((s) => matchesImei(s.imei, imei) || matchesImei(s.imei2, imei));
