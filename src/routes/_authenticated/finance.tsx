@@ -110,7 +110,12 @@ function Finance() {
   const pendingTotal = receivable.reduce((a, c) => a + Number(c.amount), 0);
 
   async function settle(id: string, amount: number) {
-    if (!window.confirm(`Confirm that the full partner receivable of ${taka(amount)} has arrived in the business account?`)) return;
+    if (
+      !window.confirm(
+        `Confirm that the full partner receivable of ${taka(amount)} has arrived in the business account?`,
+      )
+    )
+      return;
     const received = amount;
     const m = prompt(`Method the partner paid in (${PAYMENT_METHODS.join(", ")})`, "bank");
     if (m === null) return;
@@ -267,15 +272,7 @@ function Finance() {
                           </>
                         )}
                         {c.status === "pending" && canOperateCase(c) && (
-                          <Button
-                            size="sm"
-                            onClick={() =>
-                              settle(
-                                c.id,
-                                Number(c.amount),
-                              )
-                            }
-                          >
+                          <Button size="sm" onClick={() => settle(c.id, Number(c.amount))}>
                             Settle
                           </Button>
                         )}
