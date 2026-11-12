@@ -68,6 +68,7 @@ type FinanceCaseRecord = {
   status: string;
   sale_id: string | null;
   created_by: string | null;
+  payer_name: string | null;
 };
 
 function Finance() {
@@ -108,18 +109,15 @@ function Finance() {
   });
   const pendingTotal = receivable.reduce((a, c) => a + Number(c.amount), 0);
 
-  async function settle(id: string, amount: number, pct: number) {
-    const v = prompt(
-      "Amount received from partner (৳)",
-      String(Math.round(amount * (1 - pct / 100))),
-    );
+  async function settle(id: string, amount: number) {
+    const v = prompt("Amount received from partner (৳)", String(amount));
     if (v === null) return;
     const received = Number(v);
     if (!Number.isFinite(received) || received <= 0) {
       toast.error("Enter an amount greater than zero");
       return;
     }
-    const m = prompt(`Method the partner paid in (${PAYMENT_METHODS.join(", ")})`, "cash");
+    const m = prompt(`Method the partner paid in (${PAYMENT_METHODS.join(", ")})`, "bank");
     if (m === null) return;
     const method = m.trim().toLowerCase();
     if (!(PAYMENT_METHODS as readonly string[]).includes(method)) {
@@ -167,7 +165,6 @@ function Finance() {
     <div>
       <PageHeader title={t("Finance")}>
         <BranchPicker value={branch} onChange={setBranch} allowAll />
-        <NewCase partners={partners} />
       </PageHeader>
       {(partnersError || casesError || receivableError) && (
         <p className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
@@ -205,6 +202,7 @@ function Finance() {
                   <TableHead>{t("Date")}</TableHead>
                   <TableHead>{t("Branch")}</TableHead>
                   <TableHead>Partner</TableHead>
+                  <TableHead>Payment sender</TableHead>
                   <TableHead>Ref</TableHead>
                   <TableHead>{t("Customer")}</TableHead>
                   <TableHead>Invoice</TableHead>
@@ -223,6 +221,7 @@ function Finance() {
                     </TableCell>
                     <TableCell>{bname(c.branch_id)}</TableCell>
                     <TableCell>{pname(c.partner_id)}</TableCell>
+                    <TableCell>{c.payer_name || pname(c.partner_id)}</TableCell>
                     <TableCell className="font-mono text-xs">{c.ref_no}</TableCell>
                     <TableCell>
                       {c.customer_name}{" "}
@@ -279,9 +278,6 @@ function Finance() {
                               settle(
                                 c.id,
                                 Number(c.amount),
-                                Number(
-                                  partners.find((p) => p.id === c.partner_id)?.commission_pct ?? 0,
-                                ),
                               )
                             }
                           >
@@ -294,7 +290,7 @@ function Finance() {
                 ))}
                 {!cases.length && (
                   <TableRow>
-                    <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
+                    <TableCell colSpan={12} className="py-8 text-center text-muted-foreground">
                       No finance sales.
                     </TableCell>
                   </TableRow>
@@ -417,186 +413,6 @@ function EditFinanceCaseDialog({
             onClick={save}
           >
             Save changes
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function NewCase({ partners }: { partners: { id: string; name: string; active: boolean }[] }) {
-  const { data: me } = useMe();
-  const { data: branches = [] } = useBranches();
-  const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [f, setF] = useState({
-    branch_id: "",
-    partner_id: "",
-    customer_name: "",
-    customer_phone: "",
-    ref_no: "",
-    amount: "",
-    note: "",
-    sale_id: "",
-  });
-  const branchOptions = me?.isHq ? branches : branches.filter((b) => b.id === me?.branch_id);
-  const canCreate =
-    !!me &&
-    (me.canWriteHq ||
-      (!!me.branch_id &&
-        me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
-  // The invoice this case belongs to — so the partner case and the POS sale
-  // are never two unlinked records.
-  const { data: sales = [] } = useQuery({
-    queryKey: ["finance-sale-picker", f.branch_id || me?.branch_id || ""],
-    enabled: open && !!(f.branch_id || me?.branch_id),
-    queryFn: async () => {
-      const branchId = f.branch_id || me?.branch_id || "";
-      let q = supabase
-        .from("sales")
-        .select("id, invoice_no, total, created_at")
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (branchId && branchId !== "all") q = q.eq("branch_id", branchId);
-      const { data } = await q;
-      return data ?? [];
-    },
-  });
-  async function save() {
-    const amount = Number(f.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      toast.error("Enter an amount greater than zero");
-      return;
-    }
-    if (!f.partner_id || !f.customer_name.trim()) {
-      toast.error("Partner and customer name are required");
-      return;
-    }
-    const branchId = f.branch_id || me?.branch_id || "";
-    if (!branchId) {
-      toast.error("Select a branch");
-      return;
-    }
-    const { error } = await supabase.rpc("create_finance_case", {
-      _branch: branchId,
-      _partner: f.partner_id,
-      _customer: f.customer_name.trim(),
-      _phone: f.customer_phone.trim(),
-      _ref: f.ref_no.trim(),
-      _amount: amount,
-      _note: f.note.trim(),
-      _sale: f.sale_id || null,
-    });
-    if (error) {
-      toast.error(error.message);
-      return;
-    }
-    toast.success("Finance sale recorded");
-    setOpen(false);
-    setF({
-      branch_id: "",
-      partner_id: "",
-      customer_name: "",
-      customer_phone: "",
-      ref_no: "",
-      amount: "",
-      note: "",
-      sale_id: "",
-    });
-    qc.invalidateQueries({ queryKey: ["finance-cases"] });
-  }
-  if (!canCreate) return null;
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button>New finance sale</Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Record finance sale</DialogTitle>
-          <DialogDescription>
-            Record a dealer finance sale. It becomes a pending case until settled.
-          </DialogDescription>
-        </DialogHeader>
-        <p className="text-xs text-muted-foreground">
-          Sell the phone in POS first (cash, method "bank"), then record the amount the finance
-          partner will pay you here.
-        </p>
-        <div className="space-y-2">
-          <Select value={f.branch_id} onValueChange={(v) => setF({ ...f, branch_id: v })}>
-            <SelectTrigger>
-              <SelectValue placeholder="Branch" />
-            </SelectTrigger>
-            <SelectContent>
-              {branchOptions.map((b) => (
-                <SelectItem key={b.id} value={b.id}>
-                  {b.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={f.partner_id} onValueChange={(v) => setF({ ...f, partner_id: v })}>
-            <SelectTrigger>
-              <SelectValue placeholder="Finance partner" />
-            </SelectTrigger>
-            <SelectContent>
-              {partners
-                .filter((p) => p.active)
-                .map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-          <div>
-            <Label className="text-xs">POS invoice</Label>
-            <Select
-              value={f.sale_id}
-              onValueChange={(v) => {
-                const s = sales.find((x) => x.id === v);
-                setF({
-                  ...f,
-                  sale_id: v,
-                  // Pull the amount across so it does not have to be typed twice.
-                  amount: s ? String(s.total) : f.amount,
-                });
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Link an invoice (optional)" />
-              </SelectTrigger>
-              <SelectContent>
-                {sales.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.invoice_no} — {taka(s.total)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {(["customer_name", "customer_phone", "ref_no", "amount", "note"] as const).map((k) => (
-            <div key={k}>
-              <Label className="text-xs capitalize">{k.replace("_", " ")}</Label>
-              <Input
-                type={k === "amount" ? "number" : "text"}
-                min={k === "amount" ? "0.01" : undefined}
-                value={f[k]}
-                onChange={(e) => setF({ ...f, [k]: e.target.value })}
-              />
-            </div>
-          ))}
-          <Button
-            className="w-full"
-            disabled={
-              !f.partner_id ||
-              !(f.branch_id || me?.branch_id) ||
-              !f.customer_name.trim() ||
-              !(Number(f.amount) > 0)
-            }
-            onClick={save}
-          >
-            Save
           </Button>
         </div>
       </DialogContent>
