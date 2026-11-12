@@ -110,13 +110,8 @@ function Finance() {
   const pendingTotal = receivable.reduce((a, c) => a + Number(c.amount), 0);
 
   async function settle(id: string, amount: number) {
-    const v = prompt("Amount received from partner (৳)", String(amount));
-    if (v === null) return;
-    const received = Number(v);
-    if (!Number.isFinite(received) || received <= 0) {
-      toast.error("Enter an amount greater than zero");
-      return;
-    }
+    if (!window.confirm(`Confirm that the full partner receivable of ${taka(amount)} has arrived in the business account?`)) return;
+    const received = amount;
     const m = prompt(`Method the partner paid in (${PAYMENT_METHODS.join(", ")})`, "bank");
     if (m === null) return;
     const method = m.trim().toLowerCase();
