@@ -40,7 +40,7 @@ const BN: Record<string, string> = {
   "Date & time": "তারিখ ও সময়",
   Type: "ধরন",
   "Cash sale": "নগদ বিক্রয়",
-  "Kisti (installment)": "কিস্তি বিক্রয়",
+  "Kisti (installment)": "পার্টনার ফাইন্যান্স বিক্রয়",
   Customer: "ক্রেতা",
   Phone: "ফোন",
   NID: "এনআইডি",
@@ -56,6 +56,8 @@ const BN: Record<string, string> = {
   "Down payment": "ডাউন পেমেন্ট",
   "Financed (kisti)": "কিস্তিতে বাকি",
   Due: "বকেয়া",
+  "Partner receivable": "ফাইন্যান্স পার্টনারের পাওনা",
+  "Financial partner": "ফাইন্যান্স পার্টনার",
   "Kisti schedule": "কিস্তির তালিকা",
   "Due date": "নির্ধারিত তারিখ",
   Amount: "পরিমাণ",
@@ -103,19 +105,18 @@ function ReceiptPage() {
         .eq("id", saleId)
         .maybeSingle();
       if (error) throw error;
-      const { data: plan } = await supabase
-        .from("installment_plans")
-        .select("*, installments(*)")
+      const { data: financeCase } = await supabase
+        .from("finance_cases")
+        .select("amount, payer_name, finance_partners(name)")
         .eq("sale_id", saleId)
         .maybeSingle();
-      return { sale, plan };
+      return { sale, financeCase };
     },
   });
   if (isLoading) return <p className="p-8 text-sm text-muted-foreground">Loading receipt…</p>;
   const sale = data?.sale;
   if (!sale) return <p>Sale not found.</p>;
-  const plan = data?.plan;
-  const sched = [...(plan?.installments ?? [])].sort((a, b) => a.seq - b.seq);
+  const financeCase = data?.financeCase;
   const branch = branches.find((b) => b.id === sale.branch_id);
   const due = Number(sale.total) - Number(sale.paid);
   const f = FORMATS[fmt];
@@ -145,7 +146,7 @@ function ReceiptPage() {
     <div
       className={`flex items-center gap-3 ${small ? "flex-col text-center" : "border-b-2 border-foreground pb-3"}`}
     >
-      {<img src={logoSrc(s?.logo_url)} alt="" className={small ? "h-10" : "h-16"} />}
+      {<img src={logoSrc(s?.logo_url)} alt="" className={small ? "h-7 max-w-[72px] object-contain" : "h-8 max-w-[100px] object-contain"} />}
       <div className={small ? "" : "flex-1"}>
         <div className={small ? "text-base font-bold" : "text-2xl font-bold"}>
           {s?.company_name ?? "Dealer ERP"}
@@ -170,9 +171,11 @@ function ReceiptPage() {
           <b>{T("Invoice no")}:</b> {sale.invoice_no}
         </div>
         <div>
-          <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Kisti (installment)")} ·{" "}
-          {sale.payment_method}
+          <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Kisti (installment)")} · {sale.payment_method}
         </div>
+        {financeCase?.finance_partners?.name && (
+          <div><b>{T("Financial partner")}:</b> {financeCase.finance_partners.name}</div>
+        )}
       </div>
       <div className={small ? "" : "text-right"}>
         <div>
@@ -247,42 +250,10 @@ function ReceiptPage() {
       </div>
       {due > 0 && (
         <div className="flex justify-between font-semibold">
-          <span>{T(plan ? "Financed (kisti)" : "Due")}</span>
+          <span>{T(financeCase ? "Partner receivable" : "Due")}</span>
           <span>{taka(due)}</span>
         </div>
       )}
-    </div>
-  );
-
-  const Kisti = plan && (
-    <div className="mt-4 break-inside-avoid">
-      <div className="mb-1 text-xs font-bold">
-        {T("Kisti schedule")} — {plan.months} × {taka(plan.monthly_amount)}
-      </div>
-      <table className="w-full text-[10px]">
-        <thead>
-          <tr className="border-y border-foreground text-left">
-            <th>#</th>
-            <th>{T("Due date")}</th>
-            <th className="text-right">{T("Amount")}</th>
-            <th className="text-right">{T("Paid")}</th>
-            {!small && <th className="text-right">{T("Signature")}</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {sched.map((i) => (
-            <tr key={i.id} className="border-b border-dashed">
-              <td className="py-0.5">{i.seq}</td>
-              <td>{i.due_date}</td>
-              <td className="text-right tabular">{taka(i.amount)}</td>
-              <td className="text-right tabular">
-                {Number(i.paid_amount) ? taka(i.paid_amount) : ""}
-              </td>
-              {!small && <td className="w-28" />}
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 
@@ -357,7 +328,6 @@ function ReceiptPage() {
             </p>
             {Items}
             {Pay}
-            {Kisti}
             <div className="min-h-[60mm]" />
             {Sign}
           </>
@@ -381,7 +351,6 @@ function ReceiptPage() {
             </p>
             {Items}
             {Pay}
-            {Kisti}
             {Sign}
           </>
         ) : (
@@ -389,7 +358,6 @@ function ReceiptPage() {
             {Info}
             {Items}
             {Pay}
-            {Kisti}
             {Sign}
           </>
         )}
