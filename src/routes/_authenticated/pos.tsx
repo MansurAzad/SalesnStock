@@ -123,8 +123,12 @@ function POS() {
   const subtotal = cart.reduce((a, c) => a + c.price, 0);
   const listSubtotal = cart.reduce((a, c) => a + c.list_price, 0);
   const cartCost = cart.reduce((a, c) => a + c.cost, 0);
-  const baseDownPayment = saleType === "installment" ? Math.min(Math.max(num(down), 0), subtotal) : 0;
-  const discountAmount = Math.min(Math.max(num(discount), 0), saleType === "installment" ? baseDownPayment : subtotal);
+  const baseDownPayment =
+    saleType === "installment" ? Math.min(Math.max(num(down), 0), subtotal) : 0;
+  const discountAmount = Math.min(
+    Math.max(num(discount), 0),
+    saleType === "installment" ? baseDownPayment : subtotal,
+  );
   const partnerAmounts =
     saleType === "installment" && baseDownPayment > 0 && baseDownPayment < subtotal
       ? calculatePartnerFinancing(subtotal, baseDownPayment, discountAmount)
@@ -138,7 +142,9 @@ function POS() {
   const belowCost = cart.length > 0 && total < cartCost;
   const needsReason = discountAmount > 0 || effectiveDiscount > 0 || belowCost;
   // …and above the branch limit the sale has to be approved by a manager.
-  const discountLimit = Math.round((saleType === "installment" ? baseDownPayment : listSubtotal) * maxDiscountPct) / 100;
+  const discountLimit =
+    Math.round((saleType === "installment" ? baseDownPayment : listSubtotal) * maxDiscountPct) /
+    100;
   const needsApproval = effectiveDiscount > discountLimit || belowCost;
   const canApprove =
     !!me && (me.canWriteHq || (me.branch_id === branch && me.roles.includes("branch_manager")));
@@ -212,7 +218,11 @@ function POS() {
     setBusy(true);
     try {
       if (!navigator.onLine) {
-        if (saleType === "installment") throw new Error("Partner-financed sales require an internet connection. Please reconnect before checkout.");
+        if (saleType === "installment") {
+          throw new Error(
+            "Partner-financed sales require an internet connection. Please reconnect before checkout.",
+          );
+        }
         await queueOffline();
         return;
       }
@@ -249,8 +259,9 @@ function POS() {
         _months: null as unknown as number,
         _discount_reason: reason.trim(),
       };
-      const { data: saleId, error } = saleType === "installment"
-        ? await supabase.rpc("create_partner_financed_sale", {
+      const { data: saleId, error } =
+        saleType === "installment"
+          ? await supabase.rpc("create_partner_financed_sale", {
             _branch: branch,
             _customer: customerId as string,
             _items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
@@ -260,9 +271,9 @@ function POS() {
             _partner: financePartner,
             _payer_name: payerName.trim() || null,
             _ref: null,
-            _discount_reason: reason.trim(),
-          })
-        : await supabase.rpc("create_sale", saleArgs);
+              _discount_reason: reason.trim(),
+            })
+          : await supabase.rpc("create_sale", saleArgs);
       if (error) throw error;
       toast.success("Sale completed");
       setCart([]);
@@ -479,7 +490,6 @@ function POS() {
                   placeholder="If payment comes under another brand"
                 />
               </div>
-              <div className="grid grid-cols-1 gap-2">
               <div>
                 <Label className="text-xs" htmlFor="pos-down">
                   Down payment
@@ -493,14 +503,16 @@ function POS() {
                 />
               </div>
             </div>
-            </div>
           )}
           <div className="space-y-1 border-t pt-3 text-sm tabular">
             <Row l="Subtotal" v={taka(listSubtotal)} />
             {effectiveDiscount > discountAmount && (
               <Row l="Price adjustment" v={"− " + taka(effectiveDiscount - discountAmount)} />
             )}
-            <Row l={saleType === "installment" ? "Down payment discount" : t("Discount")} v={"− " + taka(discountAmount)} />
+            <Row
+              l={saleType === "installment" ? "Down payment discount" : t("Discount")}
+              v={"− " + taka(discountAmount)}
+            />
             <Row l={t("Total")} v={taka(total)} big />
             {saleType === "installment" && (
               <>
