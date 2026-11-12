@@ -1,4 +1,27 @@
 -- 0030 — third-party partner-financed POS sales
+-- Block new showroom-owned customer installment plans. The partner-financed
+-- sale RPC temporarily sets a transaction-local flag while reusing create_sale.
+CREATE OR REPLACE FUNCTION public.guard_partner_financed_installment_plan()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $
+BEGIN
+  IF current_setting('app.partner_financing_workflow', true) IS DISTINCT FROM 'on' THEN
+    RAISE EXCEPTION 'Customer installment plans are disabled; use a financial partner sale';
+  END IF;
+  RETURN NEW;
+END;
+$;
+
+DROP TRIGGER IF EXISTS trg_guard_partner_financed_installment_plan ON public.installment_plans;
+CREATE TRIGGER trg_guard_partner_financed_installment_plan
+BEFORE INSERT ON public.installment_plans
+FOR EACH ROW EXECUTE FUNCTION public.guard_partner_financed_installment_plan();
+
+REVOKE ALL ON FUNCTION public.guard_partner_financed_installment_plan() FROM PUBLIC, anon, authenticated;
+
 -- The dealer receives only the discounted down payment from the customer.
 -- The financing partner owes the original sale balance (sale subtotal minus
 -- the pre-discount down payment). No customer installment schedule is created.
@@ -81,6 +104,7 @@ BEGIN
   -- Reuse the established atomic sale/stock/discount/ledger workflow. The
   -- temporary one-month plan is removed inside this transaction immediately;
   -- the partner receivable is recorded instead.
+  PERFORM set_config('app.partner_financing_workflow', 'on', true);
   v_sale := public.create_sale(
     _branch,
     _customer,
@@ -92,6 +116,7 @@ BEGIN
     1,
     _discount_reason
   );
+  PERFORM set_config('app.partner_financing_workflow', 'off', true);
 
   DELETE FROM public.installments
   WHERE plan_id IN (SELECT id FROM public.installment_plans WHERE sale_id = v_sale);
@@ -220,3 +245,8 @@ $$;
 
 REVOKE ALL ON FUNCTION public.settle_finance(uuid, numeric, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.settle_finance(uuid, numeric, text) TO authenticated;
+
+-- The showroom no longer collects customer installments. Keep historical rows
+-- for audit, but prevent direct authenticated calls to the legacy collection RPC.
+REVOKE ALL ON FUNCTION public.pay_installment(uuid, numeric) FROM authenticated;
+REVOKE ALL ON FUNCTION public.pay_installment(uuid, numeric, text) FROM authenticated;
