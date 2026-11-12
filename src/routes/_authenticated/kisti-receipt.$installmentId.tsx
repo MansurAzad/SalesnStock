@@ -13,7 +13,9 @@ function PartnerSettlementNotice() {
     <div>
       <PageHeader title="Partner financing" />
       <Card className="max-w-xl space-y-3 p-6">
-        <h2 className="text-lg font-semibold">Customer installment receipts are not issued by the showroom</h2>
+        <h2 className="text-lg font-semibold">
+          Customer installment receipts are not issued by the showroom
+        </h2>
         <p className="text-sm text-muted-foreground">
           The financial partner collects monthly installments directly from the customer. The
           showroom records only the customer down payment and the partner’s settlement of the
