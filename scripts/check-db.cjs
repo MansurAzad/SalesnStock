@@ -41,6 +41,8 @@ const EXPECTED_TABLES = [
 
 const EXPECTED_COLUMNS = [
   ["transactions", "method"],
+  ["finance_cases", "payer_name"],
+  ["sales", "down_payment_discount"],
   ["products", "min_stock"],
   ["customers", "notes"],
   ["app_settings", "default_print_lang"],
@@ -65,6 +67,7 @@ const EXPECTED_TRIGGERS = [
   ["transactions", "tr_transactions_offline_actor"],
   ["expenses", "tr_expenses_offline_timestamp"],
   ["expenses", "tr_expenses_offline_actor"],
+  ["installment_plans", "trg_guard_partner_financed_installment_plan"],
 ];
 
 const METHODS = ["cash", "bank", "bkash", "nagad", "rocket", "card", "cheque", "online"];
@@ -110,6 +113,7 @@ const INTERNAL_FUNCTIONS = [
   "clear_offline_replay",
   "inventory_movement_context",
   "take_inventory_movement_context",
+  "pay_installment",
 ];
 
 const MANAGED_TABLES = [
@@ -121,6 +125,7 @@ const MANAGED_TABLES = [
 
 const EXPECTED_FUNCTIONS = [
   "create_sale",
+  "create_partner_financed_sale",
   "create_transfer",
   "receive_transfer",
   "pay_installment",
@@ -230,8 +235,8 @@ const EXPECTED_FUNCTIONS = [
     }
   }
   const triggerFunctions = fns.filter((fn) => fn.is_trigger);
-  if (triggerFunctions.length !== 7) {
-    permissionIssues.push(`expected 7 trigger functions, found ${triggerFunctions.length}`);
+  if (triggerFunctions.length !== 8) {
+    permissionIssues.push(`expected 8 trigger functions, found ${triggerFunctions.length}`);
   }
   console.log(`function permissions: ${permissionIssues.length} problem(s)`);
   if (permissionIssues.length) {

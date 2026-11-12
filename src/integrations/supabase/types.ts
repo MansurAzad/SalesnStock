@@ -411,6 +411,7 @@ export type Database = {
           customer_phone: string | null;
           id: string;
           note: string | null;
+          payer_name: string | null;
           partner_id: string;
           ref_no: string | null;
           sale_id: string | null;
@@ -427,6 +428,7 @@ export type Database = {
           customer_phone?: string | null;
           id?: string;
           note?: string | null;
+          payer_name?: string | null;
           partner_id: string;
           ref_no?: string | null;
           sale_id?: string | null;
@@ -1089,6 +1091,7 @@ export type Database = {
           created_at: string;
           created_by: string | null;
           customer_id: string | null;
+          down_payment_discount: number;
           discount: number;
           discount_approved_by: string | null;
           discount_reason: string | null;
@@ -1109,6 +1112,7 @@ export type Database = {
           created_at?: string;
           created_by?: string | null;
           customer_id?: string | null;
+          down_payment_discount?: number;
           discount?: number;
           discount_approved_by?: string | null;
           discount_reason?: string | null;
@@ -1129,6 +1133,7 @@ export type Database = {
           created_at?: string;
           created_by?: string | null;
           customer_id?: string | null;
+          down_payment_discount?: number;
           discount?: number;
           discount_approved_by?: string | null;
           discount_reason?: string | null;
@@ -1436,6 +1441,21 @@ export type Database = {
           _months: number;
           _paid: number;
           _sale_type: string;
+        };
+        Returns: string;
+      };
+      create_partner_financed_sale: {
+        Args: {
+          _branch: string;
+          _customer: string;
+          _items: Json;
+          _down_payment: number;
+          _down_payment_discount: number;
+          _method: string;
+          _partner: string;
+          _payer_name?: string | null;
+          _ref?: string | null;
+          _discount_reason?: string | null;
         };
         Returns: string;
       };

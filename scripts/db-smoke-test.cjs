@@ -577,108 +577,83 @@ async function runAll(tx) {
   });
 
   // ---------------------------------------------------------------------
-  // 2. Installments
+  // 2. Third-party partner financing
   // ---------------------------------------------------------------------
-  let planId = null;
-  let firstInst = null;
-  await step("an installment sale builds a schedule that adds up exactly", async () => {
+  let partnerCaseId = null;
+  await step(
+    "a partner-financed sale discounts only the down payment and creates no customer schedule",
+    async () => {
+      const item = await mintItem(brA.id);
+      await as(tx, U.salesA);
+      const rows = await tx`
+        select public.create_partner_financed_sale(
+          ${brA.id}, ${custA.id}, ${cart(item.id)}::text::jsonb,
+          4000, 300, 'cash', ${partner.id}, 'Smoke Brand Ltd', 'PF-001', 'approved DP discount'
+        ) as id`;
+      const financedSaleId = rows[0].id;
+      assert(financedSaleId, "the partner-financed sale was not created");
+
+      await asDb(tx);
+      const [sale] = await tx`select * from public.sales where id = ${financedSaleId}`;
+      eq(sale.subtotal, 12000, "partner sale subtotal");
+      eq(sale.down_payment_discount, 300, "persisted down-payment discount");
+      eq(sale.discount, 300, "the discount recorded on the sale");
+      eq(sale.total, 11700, "sale total after DP discount");
+      eq(sale.paid, 3700, "customer cash received after DP discount");
+
+      const [financeCase] = await tx`
+        select * from public.finance_cases where sale_id = ${financedSaleId}`;
+      assert(financeCase, "partner receivable case was not created");
+      partnerCaseId = financeCase.id;
+      eq(financeCase.amount, 8000, "partner receivable = subtotal - original DP");
+      eq(financeCase.payer_name, "Smoke Brand Ltd", "remitting payer name");
+      eq(financeCase.status, "pending", "new partner case status");
+
+      const [downPayment] = await tx`
+        select * from public.transactions where ref_id = ${financedSaleId} and kind = 'income'`;
+      eq(downPayment.amount, 3700, "only discounted DP reaches showroom");
+      eq(downPayment.category, "Down payment", "DP transaction category");
+
+      const [plans] = await tx`
+        select count(*)::int as n from public.installment_plans where sale_id = ${financedSaleId}`;
+      eq(plans.n, 0, "partner-financed sale must not create a showroom installment plan");
+      const [installments] = await tx`
+        select count(*)::int as n
+        from public.installments i
+        join public.installment_plans p on p.id = i.plan_id
+        where p.sale_id = ${financedSaleId}`;
+      eq(installments.n, 0, "partner-financed sale must not create customer installments");
+    },
+  );
+
+  await step("the legacy showroom installment-sale path is blocked", async () => {
     const item = await mintItem(brA.id);
-    await as(tx, U.salesA);
-    const rows = await tx`
-      select public.create_sale(${brA.id}, ${custA.id}, ${cart(item.id)}::text::jsonb, 0, 4000, 'cash', 'installment', 3, null) as id`;
-    const instSaleId = rows[0].id;
-    assert(instSaleId, "the installment sale was not created");
-
-    await asDb(tx);
-    const [plan] = await tx`select * from public.installment_plans where sale_id = ${instSaleId}`;
-    planId = plan.id;
-    eq(plan.financed_amount, 8000, "installment_plans.financed_amount");
-    eq(plan.down_payment, 4000, "installment_plans.down_payment");
-    eq(plan.months, 3, "installment_plans.months");
-    eq(plan.status, "active", "installment_plans.status");
-
-    const schedule =
-      await tx`select * from public.installments where plan_id = ${planId} order by seq`;
-    eq(schedule.length, 3, "the number of installments");
-    const sum = schedule.reduce((acc, row) => acc + Number(row.amount), 0);
-    near(sum, 8000, "the schedule adds up to the financed amount");
-    assert(
-      schedule.every((row) => Number(row.amount) > 0),
-      "the schedule has a zero installment",
-    );
-    firstInst = schedule[0];
-
-    const [down] = await tx`
-      select * from public.transactions where ref_id = ${instSaleId} and kind = 'income'`;
-    eq(down.amount, 4000, "the down payment");
-    eq(down.category, "Down payment", "the down payment category");
-  });
-
-  await step("an installment can be paid and the money is booked", async () => {
-    await as(tx, U.salesA);
-    await tx`select public.pay_installment(${firstInst.id}, 2666.66, 'cash')`;
-    await asDb(tx);
-    const [row] = await tx`select * from public.installments where id = ${firstInst.id}`;
-    near(row.paid_amount, 2666.66, "installments.paid_amount");
-    const [entry] = await tx`
-      select * from public.transactions where ref_id = ${planId} and kind = 'income'`;
-    near(entry.amount, 2666.66, "the installment transaction");
-    eq(entry.category, "Installment", "the installment category");
-  });
-
-  await step("an installment cannot be overpaid", async () => {
     await as(tx, U.salesA);
     await expectError(
       tx,
-      "overpayment",
-      "pay_installment",
-      [firstInst.id, 999999, "cash"],
-      "Amount must be between",
+      "legacy installment sale",
+      "create_sale",
+      [brA.id, custA.id, JSON.parse(cart(item.id)), 0, 4000, "cash", "installment", 3, null],
+      "Customer installment plans are disabled",
     );
   });
 
-  await step("an installment of another branch cannot be paid", async () => {
-    await as(tx, U.salesB);
-    await expectError(
-      tx,
-      "foreign installment",
-      "pay_installment",
-      [firstInst.id, 100, "cash"],
-      "Not allowed",
-    );
-  });
-
-  await step("paying every installment closes the plan", async () => {
-    await as(tx, U.salesA);
-    const rest =
-      await tx`select * from public.installments where plan_id = ${planId} and paid_amount < amount order by seq`;
-    for (const row of rest) {
-      const due = Number(row.amount) - Number(row.paid_amount);
-      await tx`select public.pay_installment(${row.id}, ${due}, 'cash')`;
-    }
-    await asDb(tx);
-    const [plan] = await tx`select * from public.installment_plans where id = ${planId}`;
-    eq(plan.status, "completed", "the finished plan status");
-  });
-
-  await step("an unpaid kisti stays on the books of the customer", async () => {
-    const item = await mintItem(brA.id);
-    await as(tx, U.salesA);
-    const rows = await tx`
-      select public.create_sale(${brA.id}, ${custDue.id}, ${cart(item.id)}::text::jsonb, 0, 2000, 'cash', 'installment', 2, null) as id`;
-    assert(rows[0].id, "the second installment sale was not created");
-
-    await asDb(tx);
-    const [plan] = await tx`select * from public.installment_plans where sale_id = ${rows[0].id}`;
-    eq(plan.financed_amount, 10000, "the financed amount");
-    eq(plan.months, 2, "the number of months");
-    const schedule =
-      await tx`select * from public.installments where plan_id = ${plan.id} order by seq`;
-    eq(schedule.length, 2, "the number of installments");
-    near(schedule[0].amount, 5000, "the first installment");
-    near(schedule[1].amount, 5000, "the last installment");
-    assert(schedule[0].due_date > new Date(), "the first due date is not in the future");
-  });
+  await step(
+    "the showroom cannot execute the legacy customer installment collection RPC",
+    async () => {
+      await as(tx, U.salesA);
+      const message = await expectError(tx, "legacy installment collection", "pay_installment", [
+        "00000000-0000-0000-0000-000000009999",
+        100,
+        "cash",
+      ]);
+      assert(
+        message.includes("permission denied for function pay_installment") ||
+          message.includes("Customer installments are collected directly by the financial partner"),
+        `legacy installment RPC was blocked for an unexpected reason: ${message}`,
+      );
+    },
+  );
 
   // ---------------------------------------------------------------------
   // 3. Transfers
@@ -1104,107 +1079,109 @@ async function runAll(tx) {
   // ---------------------------------------------------------------------
   // 7. Finance partners
   // ---------------------------------------------------------------------
-  await step("a finance case can be created and settled", async () => {
+  await step("the partner must remit the full receivable before the case is settled", async () => {
+    assert(partnerCaseId, "the partner-financed POS sale did not create a finance case");
     await as(tx, U.salesA);
-    const rows = await tx`
-      select public.create_finance_case(${brA.id}, ${partner.id}, 'Financed Customer', '01711111111',
-        'REF-1', 10000, 'phone on EMI', null) as id`;
-    const caseId = rows[0].id;
-    assert(caseId, "the finance case was not created");
+    await expectError(
+      tx,
+      "partial settlement",
+      "settle_finance",
+      [partnerCaseId, 7900, "bank"],
+      "Settlement must equal the full partner receivable",
+    );
+    await expectError(
+      tx,
+      "over settlement",
+      "settle_finance",
+      [partnerCaseId, 8100, "bank"],
+      "Settlement must equal the full partner receivable",
+    );
+    await tx`select public.settle_finance(${partnerCaseId}, 8000, 'bank')`;
 
     await asDb(tx);
-    const [created] = await tx`select * from public.finance_cases where id = ${caseId}`;
-    eq(created.status, "pending", "the finance case status");
-    eq(created.amount, 10000, "the finance case amount");
-
-    await as(tx, U.salesA);
-    await tx`select public.settle_finance(${caseId}, 9000)`;
-    await asDb(tx);
-    const [settled] = await tx`select * from public.finance_cases where id = ${caseId}`;
-    eq(settled.status, "settled", "the settled case status");
-    near(settled.commission, 1000, "the settled commission");
-    const [entry] = await tx`select * from public.transactions where ref_id = ${caseId}`;
-    near(entry.amount, 9000, "the settlement transaction");
-    eq(entry.category, "finance_settlement", "the settlement category");
-    const [ledger] =
-      await tx`select * from public.finance_partner_ledger where case_id = ${caseId}`;
-    eq(ledger.kind, "received", "the ledger kind");
-    near(ledger.amount, 9000, "the ledger amount");
+    const [settled] = await tx`select * from public.finance_cases where id = ${partnerCaseId}`;
+    eq(settled.status, "settled", "the settled partner case status");
+    near(settled.commission, 0, "no unexplained commission deduction");
+    const [entry] = await tx`
+      select * from public.transactions where ref_id = ${partnerCaseId} and category = 'finance_settlement'`;
+    near(entry.amount, 8000, "full partner settlement transaction");
+    eq(entry.kind, "income", "partner settlement is incoming money");
+    eq(entry.method, "bank", "the settlement bank method");
+    const [ledger] = await tx`
+      select * from public.finance_partner_ledger where case_id = ${partnerCaseId}`;
+    eq(ledger.kind, "received", "settlement ledger direction");
+    near(ledger.amount, 8000, "settlement ledger amount");
   });
 
-  await step("a finance case cannot be settled twice", async () => {
-    await asDb(tx);
-    const [created] =
-      await tx`select * from public.finance_cases where partner_id = ${partner.id} limit 1`;
+  await step("a settled finance case cannot be settled twice", async () => {
     await as(tx, U.salesA);
     await expectError(
       tx,
       "double settlement",
       "settle_finance",
-      [created.id, 1000],
-      "Already settled",
+      [partnerCaseId, 8000, "bank"],
+      "Finance case is not pending",
     );
   });
 
-  await step("a settlement above the case amount is refused", async () => {
+  await step("an invalid settlement method is refused without settling the case", async () => {
+    const item = await mintItem(brA.id);
     await as(tx, U.salesA);
-    const rows = await tx`
-      select public.create_finance_case(${brA.id}, ${partner.id}, 'Financed Customer 2', '01722222222',
-        'REF-2', 5000, 'phone on EMI', null) as id`;
-    await expectError(
-      tx,
-      "over settlement",
-      "settle_finance",
-      [rows[0].id, 9000],
-      "Invalid amount",
-    );
-  });
-
-  await step("a settlement can arrive in the bank instead of the drawer", async () => {
-    await as(tx, U.salesA);
-    const rows = await tx`
-      select public.create_finance_case(${brA.id}, ${partner.id}, 'Financed Customer 3', '01733333333',
-        'REF-3', 8000, 'phone on EMI', null) as id`;
-    const caseId = rows[0].id;
-    await tx`select public.settle_finance(${caseId}, 7500, 'bank')`;
+    const [sale] = await tx`
+      select public.create_partner_financed_sale(
+        ${brA.id}, ${custA.id}, ${cart(item.id)}::text::jsonb,
+        3000, 0, 'cash', ${partner.id}, 'Smoke Brand Ltd', 'PF-BAD-METHOD', null
+      ) as id`;
     await asDb(tx);
-    const [entry] = await tx`select * from public.transactions where ref_id = ${caseId}`;
-    eq(entry.method, "bank", "the method the partner paid in");
-    near(entry.amount, 7500, "the bank settlement amount");
+    const [financeCase] = await tx`
+      select * from public.finance_cases where sale_id = ${sale.id}`;
     await as(tx, U.salesA);
-    const bad = await tx`
-      select public.create_finance_case(${brA.id}, ${partner.id}, 'Financed Customer 4', '01744444444',
-        'REF-4', 4000, 'phone on EMI', null) as id`;
     await expectError(
       tx,
-      "settlement in an unknown method",
+      "unknown settlement method",
       "settle_finance",
-      [bad[0].id, 100, "crypto"],
+      [financeCase.id, Number(financeCase.amount), "crypto"],
       "Unknown payment method",
     );
-  });
-
-  await step("a partner payment lands in both the ledger and the cash book", async () => {
-    await as(tx, U.salesA);
-    await tx`select public.partner_payment(${partner.id}, ${brA.id}, 'paid', 5000, 'cash', 'advance')`;
     await asDb(tx);
-    const [ledger] = await tx`
-      select * from public.finance_partner_ledger where partner_id = ${partner.id} and kind = 'paid' order by created_at desc limit 1`;
-    near(ledger.amount, 5000, "the partner ledger amount");
-    const [entry] = await tx`
-      select * from public.transactions where ref_id = ${partner.id} and kind = 'expense' order by created_at desc limit 1`;
-    near(entry.amount, 5000, "the partner payment transaction");
-    eq(entry.category, "Finance partner payment", "the partner payment category");
+    const [stillPending] = await tx`
+      select status from public.finance_cases where id = ${financeCase.id}`;
+    eq(stillPending.status, "pending", "invalid method must not settle the case");
   });
 
-  await step("an unknown partner payment kind is refused", async () => {
+  await step(
+    "a free-standing partner receipt is rejected so it cannot reduce balance without settling its case",
+    async () => {
+      await as(tx, U.salesA);
+      await expectError(
+        tx,
+        "unlinked partner receipt",
+        "partner_payment",
+        [partner.id, brA.id, "received", 2500, "bank", "remittance batch"],
+        "Direct partner receipts are disabled; settle the linked finance case in Finance",
+      );
+    },
+  );
+
+  await step("the showroom cannot make an outgoing payment to a finance partner", async () => {
     await as(tx, U.salesA);
     await expectError(
       tx,
-      "bad partner kind",
+      "outgoing partner payment",
+      "partner_payment",
+      [partner.id, brA.id, "paid", 5000, "cash", "advance"],
+      "Outgoing payments to financial partners are disabled",
+    );
+  });
+
+  await step("an unknown partner payment direction is refused", async () => {
+    await as(tx, U.salesA);
+    await expectError(
+      tx,
+      "unknown partner direction",
       "partner_payment",
       [partner.id, brA.id, "borrowed", 100, "cash", ""],
-      "Invalid kind",
+      "Invalid partner payment direction",
     );
   });
 
@@ -1614,9 +1591,7 @@ async function runAll(tx) {
     eq(lowRow.shortage, 10, "the shortage in the low stock report");
 
     const ageing = await tx`select * from public.kisti_ageing(null)`;
-    assert(ageing.length > 0, "the ageing report is empty");
-    const totals = ageing.reduce((acc, row) => acc + Number(row.total), 0);
-    near(totals, 10000, "the ageing report total");
+    eq(ageing.length, 0, "partner-financed sales must not appear as showroom kisti ageing");
   });
 
   await step("the reporting functions are limited to the branch of the caller", async () => {
@@ -1637,16 +1612,12 @@ async function runAll(tx) {
     assert(branches.size >= 2, "the head office report only covers one branch");
   });
 
-  await step("the customer dues report lists the unpaid installments", async () => {
+  await step("partner-financed customers do not appear in showroom customer dues", async () => {
     await as(tx, U.super);
     const dues = await tx`select * from public.customer_dues(null)`;
-    const row = dues.find((r) => r.customer_id === custDue.id);
-    assert(row, "the customer is missing from the dues report");
-    eq(row.due_count, 2, "the number of open installments");
-    near(row.due_amount, 10000, "the open amount");
     assert(
       !dues.some((r) => r.customer_id === custA.id),
-      "a customer that paid everything is still listed as a debtor",
+      "a partner-financed customer was incorrectly shown as owing installments to the showroom",
     );
   });
 
@@ -1673,25 +1644,19 @@ async function runAll(tx) {
     eq(entry.method, "card", "the method copied into the cash book");
   });
 
-  await step("a rocket kisti collection is booked as rocket income", async () => {
-    await asDb(tx);
-    const [inst] = await tx`
-      select i.id, p.id as plan, i.amount - i.paid_amount as due
-      from public.installments i
-      join public.installment_plans p on p.id = i.plan_id
-      where i.paid_amount < i.amount order by i.due_date limit 1`;
-    assert(inst, "there is no open installment left to collect");
-    await as(tx, U.salesA);
-    await tx`select public.pay_installment(${inst.id}, ${inst.due}, 'rocket')`;
-    await asDb(tx);
-    const [entry] = await tx`
-      select * from public.transactions
-      where ref_id = ${inst.plan} and kind = 'income' and category = 'Installment'
-      order by created_at desc limit 1`;
-    assert(entry, "the kisti collection never reached the cash book");
-    eq(entry.method, "rocket", "the wallet the kisti arrived in");
-    near(entry.amount, inst.due, "the amount collected in rocket");
-  });
+  await step(
+    "a Rocket partner receipt must settle a linked finance case, not a free-standing ledger entry",
+    async () => {
+      await as(tx, U.salesA);
+      await expectError(
+        tx,
+        "unlinked Rocket partner receipt",
+        "partner_payment",
+        [partner.id, brA.id, "received", 400, "rocket", "wallet remittance"],
+        "Direct partner receipts are disabled; settle the linked finance case in Finance",
+      );
+    },
+  );
 
   await step("a payment method the shop does not take is refused", async () => {
     const item = await mintItem(brA.id);
@@ -1724,14 +1689,6 @@ async function runAll(tx) {
     await tx`
       select public.create_sale(${brA.id}, ${custA.id}, ${cart(item.id)}::text::jsonb, 0, 12000, 'cash', 'cash', null, null)`;
 
-    await asDb(tx);
-    const [inst] = await tx`
-      select id, amount - paid_amount as due from public.installments
-      where paid_amount < amount order by due_date limit 1`;
-    const kisti = Math.min(2000, Number(inst.due));
-    await as(tx, U.salesA);
-    await tx`select public.pay_installment(${inst.id}, ${kisti}, 'cash')`;
-
     await as(tx, U.manager);
     await tx`
       select public.submit_expense(${brA.id}, 'Food', 500, ${cashToday}, 'cash', 'staff lunch', '', '')`;
@@ -1743,11 +1700,6 @@ async function runAll(tx) {
 
     near(after.opening_cash, 5000, "the cash the day opened with");
     near(Number(after.cash_sales) - Number(before.cash_sales), 12000, "today's cash sales");
-    near(
-      Number(after.cash_collections) - Number(before.cash_collections),
-      kisti,
-      "the cash kisti collected",
-    );
     near(Number(after.cash_expenses) - Number(before.cash_expenses), 500, "today's cash expenses");
     near(
       Number(after.hq_deposits) - Number(before.hq_deposits),
@@ -1761,7 +1713,7 @@ async function runAll(tx) {
     );
     near(
       Number(after.closing_cash) - Number(before.closing_cash),
-      12000 + kisti - 500 - 2000,
+      12000 - 500 - 2000,
       "what the drawer gained",
     );
     near(
@@ -2288,30 +2240,32 @@ async function runAll(tx) {
     );
   });
 
-  await step("an offline kisti keeps the wallet it was collected in", async () => {
-    const ref = "11111111-2222-3333-4444-555555555599";
-    await asDb(tx);
-    const [inst] = await tx`
-      select i.id, i.plan_id, i.amount - i.paid_amount as due
-      from public.installments i
-      where i.paid_amount < i.amount order by i.due_date limit 1`;
-    const amt = Math.min(1500, Number(inst.due));
-    const payload = JSON.stringify({ inst: inst.id, amount: amt, method: "nagad" });
+  await step(
+    "an offline kisti queue is rejected because the showroom no longer collects it",
+    async () => {
+      const ref = "11111111-2222-3333-4444-555555555599";
+      const payload = JSON.stringify({
+        inst: "00000000-0000-0000-0000-000000009999",
+        amount: 1500,
+        method: "nagad",
+      });
 
-    await as(tx, U.salesA);
-    const applied = await tx`
-      select public.apply_offline_op(
-        ${ref}::uuid, 'kisti', ${payload}::text::jsonb,
-        (now() - interval '1 day'), 'smoke-device', ${U.salesA}) as res`;
-    eq(applied[0].res.status, "applied", "the queued kisti collection");
-
-    await asDb(tx);
-    const [booking] = await tx`
-      select count(*)::int as n from public.transactions
-      where category = 'Installment' and ref_id = ${inst.plan_id}
-        and amount = ${amt}::numeric and method = 'nagad'`;
-    eq(booking.n, 1, "the wallet a queued kisti was collected in");
-  });
+      await as(tx, U.salesA);
+      const applied = await tx`
+        select public.apply_offline_op(
+          ${ref}::uuid, 'kisti', ${payload}::text::jsonb,
+          (now() - interval '1 day'), 'smoke-device', ${U.salesA}) as res`;
+      assert(
+        applied[0].res.status !== "applied",
+        "a queued showroom kisti was incorrectly applied",
+      );
+      await asDb(tx);
+      const [booking] = await tx`
+        select count(*)::int as n from public.transactions
+        where category = 'Installment' and amount = 1500 and method = 'nagad'`;
+      eq(booking.n, 0, "legacy offline kisti must not create showroom income");
+    },
+  );
 
   await step("one account cannot empty another account's queue", async () => {
     const ref = "11111111-2222-3333-4444-555555555588";
@@ -2376,20 +2330,7 @@ async function runAll(tx) {
       saleId,
       [{ subtotal: -1 }, { discount: -1 }, { total: -1 }, { paid: -1 }],
     ],
-    [
-      "installment_plans",
-      "chk_installment_plans",
-      "id",
-      planId,
-      [
-        { financed_amount: 0 },
-        { down_payment: -1 },
-        { months: 0 },
-        { months: 37 },
-        { monthly_amount: 0 },
-      ],
-    ],
-    ["installments", "chk_installments", "id", firstInst?.id, [{ amount: 0 }, { paid_amount: -1 }]],
+    ["sales", "chk_sales_down_payment_discount", "id", saleId, [{ down_payment_discount: -1 }]],
     ["employees", "chk_employees_salary", "id", staff[0].id, [{ salary: -1 }]],
   ];
   for (const [table, constraint, key, id, invalidValues] of constraintCases) {

@@ -71,13 +71,6 @@ function Accounts() {
   // Setting the till's opening or the close-of-day count is the same job as
   // posting an income entry, so the same people may do it.
   const canDailyCash = canAddIncome;
-  const canPartner =
-    !!me &&
-    !!branch &&
-    branch !== "all" &&
-    (me.canWriteHq ||
-      (me.branch_id === branch &&
-        me.roles.some((r) => ["branch_manager", "sales", "accountant"].includes(r))));
   const canReverse = (x: { branch_id: string }) =>
     !!me &&
     (me.canWriteHq ||
@@ -319,7 +312,7 @@ function Accounts() {
           </Button>
         </Card>
       )}
-      {branch && <PartnerAccounts branch={branch} canAdd={canPartner} />}
+      {branch && <PartnerAccounts branch={branch} />}
       <Input
         className="mb-3 max-w-sm bg-card"
         aria-label="Search transactions"
