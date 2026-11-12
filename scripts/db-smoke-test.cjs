@@ -1073,42 +1073,39 @@ async function runAll(tx) {
   // ---------------------------------------------------------------------
   // 7. Finance partners
   // ---------------------------------------------------------------------
-  await step(
-    "the partner must remit the full receivable before the case is settled",
-    async () => {
-      assert(partnerCaseId, "the partner-financed POS sale did not create a finance case");
-      await as(tx, U.salesA);
-      await expectError(
-        tx,
-        "partial settlement",
-        "settle_finance",
-        [partnerCaseId, 7900, "bank"],
-        "Settlement must equal the full partner receivable",
-      );
-      await expectError(
-        tx,
-        "over settlement",
-        "settle_finance",
-        [partnerCaseId, 8100, "bank"],
-        "Settlement must equal the full partner receivable",
-      );
-      await tx`select public.settle_finance(${partnerCaseId}, 8000, 'bank')`;
+  await step("the partner must remit the full receivable before the case is settled", async () => {
+    assert(partnerCaseId, "the partner-financed POS sale did not create a finance case");
+    await as(tx, U.salesA);
+    await expectError(
+      tx,
+      "partial settlement",
+      "settle_finance",
+      [partnerCaseId, 7900, "bank"],
+      "Settlement must equal the full partner receivable",
+    );
+    await expectError(
+      tx,
+      "over settlement",
+      "settle_finance",
+      [partnerCaseId, 8100, "bank"],
+      "Settlement must equal the full partner receivable",
+    );
+    await tx`select public.settle_finance(${partnerCaseId}, 8000, 'bank')`;
 
-      await asDb(tx);
-      const [settled] = await tx`select * from public.finance_cases where id = ${partnerCaseId}`;
-      eq(settled.status, "settled", "the settled partner case status");
-      near(settled.commission, 0, "no unexplained commission deduction");
-      const [entry] = await tx`
-        select * from public.transactions where ref_id = ${partnerCaseId} and category = 'finance_settlement'`;
-      near(entry.amount, 8000, "full partner settlement transaction");
-      eq(entry.kind, "income", "partner settlement is incoming money");
-      eq(entry.method, "bank", "the settlement bank method");
-      const [ledger] = await tx`
-        select * from public.finance_partner_ledger where case_id = ${partnerCaseId}`;
-      eq(ledger.kind, "received", "settlement ledger direction");
-      near(ledger.amount, 8000, "settlement ledger amount");
-    },
-  );
+    await asDb(tx);
+    const [settled] = await tx`select * from public.finance_cases where id = ${partnerCaseId}`;
+    eq(settled.status, "settled", "the settled partner case status");
+    near(settled.commission, 0, "no unexplained commission deduction");
+    const [entry] = await tx`
+      select * from public.transactions where ref_id = ${partnerCaseId} and category = 'finance_settlement'`;
+    near(entry.amount, 8000, "full partner settlement transaction");
+    eq(entry.kind, "income", "partner settlement is incoming money");
+    eq(entry.method, "bank", "the settlement bank method");
+    const [ledger] = await tx`
+      select * from public.finance_partner_ledger where case_id = ${partnerCaseId}`;
+    eq(ledger.kind, "received", "settlement ledger direction");
+    near(ledger.amount, 8000, "settlement ledger amount");
+  });
 
   await step("a settled finance case cannot be settled twice", async () => {
     await as(tx, U.salesA);
