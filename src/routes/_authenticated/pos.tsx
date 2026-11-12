@@ -450,17 +450,27 @@ function POS() {
               <div>
                 <Label className="text-xs">Financial partner</Label>
                 <Select value={financePartner} onValueChange={setFinancePartner}>
-                  <SelectTrigger><SelectValue placeholder="Select financial partner" /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select financial partner" />
+                  </SelectTrigger>
                   <SelectContent>
-                    {financePartners.map((partner) => <SelectItem key={partner.id} value={partner.id}>{partner.name}</SelectItem>)}
+                    {financePartners.map((partner) => (
+                      <SelectItem key={partner.id} value={partner.id}>
+                        {partner.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
               <div>
                 <Label className="text-xs">Payment sender / settlement brand (optional)</Label>
-                <Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="If payment comes under another brand" />
+                <Input
+                  value={payerName}
+                  onChange={(e) => setPayerName(e.target.value)}
+                  placeholder="If payment comes under another brand"
+                />
               </div>
-            <div className="grid grid-cols-1 gap-2">
+              <div className="grid grid-cols-1 gap-2">
               <div>
                 <Label className="text-xs" htmlFor="pos-down">
                   Down payment
@@ -502,6 +512,7 @@ function POS() {
               (saleType === "installment" &&
                 (!/^01\d{9}$/.test(phone) ||
                   financed <= 0 ||
+                  downPayment <= 0 ||
                   !financePartner ||
                   (!existing && !custName.trim())))
             }
