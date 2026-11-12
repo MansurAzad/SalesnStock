@@ -41,6 +41,7 @@ const EXPECTED_TABLES = [
 
 const EXPECTED_COLUMNS = [
   ["transactions", "method"],
+  ["finance_cases", "payer_name"],
   ["products", "min_stock"],
   ["customers", "notes"],
   ["app_settings", "default_print_lang"],
@@ -121,6 +122,7 @@ const MANAGED_TABLES = [
 
 const EXPECTED_FUNCTIONS = [
   "create_sale",
+  "create_partner_financed_sale",
   "create_transfer",
   "receive_transfer",
   "pay_installment",
