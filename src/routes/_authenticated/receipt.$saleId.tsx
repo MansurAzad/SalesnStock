@@ -240,10 +240,7 @@ function ReceiptPage() {
   if (sale.sale_type === "cash") {
     discountRows.push(["Discount", -Number(sale.discount)]);
   } else {
-    const priceAdjustment = Math.max(
-      Number(sale.discount) - Number(sale.down_payment_discount),
-      0,
-    );
+    const priceAdjustment = Math.max(Number(sale.discount) - Number(sale.down_payment_discount), 0);
     if (priceAdjustment > 0) discountRows.push(["Price adjustment", -priceAdjustment]);
     discountRows.push(["Down payment discount", -Number(sale.down_payment_discount)]);
   }
