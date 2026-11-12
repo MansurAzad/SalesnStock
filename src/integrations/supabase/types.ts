@@ -1439,6 +1439,21 @@ export type Database = {
         };
         Returns: string;
       };
+      create_partner_financed_sale: {
+        Args: {
+          _branch: string;
+          _customer: string;
+          _items: Json;
+          _down_payment: number;
+          _down_payment_discount: number;
+          _method: string;
+          _partner: string;
+          _payer_name?: string | null;
+          _ref?: string | null;
+          _discount_reason?: string | null;
+        };
+        Returns: string;
+      };
       create_transfer: {
         Args: { _from: string; _item_ids: string[]; _note: string; _to: string };
         Returns: string;
