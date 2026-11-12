@@ -247,6 +247,18 @@ REVOKE ALL ON FUNCTION public.settle_finance(uuid, numeric, text) FROM PUBLIC, a
 GRANT EXECUTE ON FUNCTION public.settle_finance(uuid, numeric, text) TO authenticated;
 
 -- The showroom no longer collects customer installments. Keep historical rows
--- for audit, but prevent direct authenticated calls to the legacy collection RPC.
+-- for audit, but reject the legacy collection RPC even when called internally by
+-- an old offline queue. The two-argument compatibility wrapper delegates here.
+CREATE OR REPLACE FUNCTION public.pay_installment(_inst uuid, _amount numeric, _method text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $
+BEGIN
+  RAISE EXCEPTION 'Customer installments are collected directly by the financial partner; showroom collection is disabled';
+END;
+$;
+
 REVOKE ALL ON FUNCTION public.pay_installment(uuid, numeric) FROM authenticated;
 REVOKE ALL ON FUNCTION public.pay_installment(uuid, numeric, text) FROM authenticated;
