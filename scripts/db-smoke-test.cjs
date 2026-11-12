@@ -1150,22 +1150,16 @@ async function runAll(tx) {
   });
 
   await step(
-    "a partner remittance is recorded as incoming money in the ledger and cash book",
+    "a free-standing partner receipt is rejected so it cannot reduce balance without settling its case",
     async () => {
       await as(tx, U.salesA);
-      await tx`select public.partner_payment(${partner.id}, ${brA.id}, 'received', 2500, 'bank', 'remittance batch')`;
-      await asDb(tx);
-      const [ledger] = await tx`
-        select * from public.finance_partner_ledger
-        where partner_id = ${partner.id} and kind = 'received'
-        order by created_at desc limit 1`;
-      near(ledger.amount, 2500, "partner remittance ledger amount");
-      const [entry] = await tx`
-        select * from public.transactions
-        where ref_id = ${partner.id} and kind = 'income'
-          and category = 'Finance partner receipt'
-        order by created_at desc limit 1`;
-      near(entry.amount, 2500, "partner remittance income amount");
+      await expectError(
+        tx,
+        "unlinked partner receipt",
+        "partner_payment",
+        [partner.id, brA.id, "received", 2500, "bank", "remittance batch"],
+        "Direct partner receipts are disabled; settle the linked finance case in Finance",
+      );
     },
   );
 
@@ -1187,7 +1181,7 @@ async function runAll(tx) {
       "unknown partner direction",
       "partner_payment",
       [partner.id, brA.id, "borrowed", 100, "cash", ""],
-      "Outgoing payments to financial partners are disabled",
+      "Invalid partner payment direction",
     );
   });
 
@@ -1650,17 +1644,15 @@ async function runAll(tx) {
     eq(entry.method, "card", "the method copied into the cash book");
   });
 
-  await step("a partner remittance received by Rocket is booked as incoming income", async () => {
+  await step("a Rocket partner receipt must settle a linked finance case, not a free-standing ledger entry", async () => {
     await as(tx, U.salesA);
-    await tx`select public.partner_payment(${partner.id}, ${brA.id}, 'received', 400, 'rocket', 'wallet remittance')`;
-    await asDb(tx);
-    const [entry] = await tx`
-      select * from public.transactions
-      where ref_id = ${partner.id} and kind = 'income'
-        and category = 'Finance partner receipt' and method = 'rocket'
-      order by created_at desc limit 1`;
-    assert(entry, "the Rocket remittance never reached the cash book");
-    near(entry.amount, 400, "the incoming Rocket remittance");
+    await expectError(
+      tx,
+      "unlinked Rocket partner receipt",
+      "partner_payment",
+      [partner.id, brA.id, "received", 400, "rocket", "wallet remittance"],
+      "Direct partner receipts are disabled; settle the linked finance case in Finance",
+    );
   });
 
   await step("a payment method the shop does not take is refused", async () => {
