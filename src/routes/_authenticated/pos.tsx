@@ -183,7 +183,7 @@ function POS() {
         paid: saleType === "cash" ? total : downPayment,
         method,
         sale_type: saleType,
-        months: saleType === "installment" ? Number(months) : "",
+        months: "",
         discount_reason: reason.trim(),
       },
       `Sale ${taka(total)} · ${cart.length} pcs${phone ? " · " + phone : ""}`,
@@ -491,7 +491,7 @@ function POS() {
             {effectiveDiscount > discountAmount && (
               <Row l="Price adjustment" v={"− " + taka(effectiveDiscount - discountAmount)} />
             )}
-            <Row l={t("Discount")} v={"− " + taka(discountAmount)} />
+            <Row l={saleType === "installment" ? "Down payment discount" : t("Discount")} v={"− " + taka(discountAmount)} />
             <Row l={t("Total")} v={taka(total)} big />
             {saleType === "installment" && (
               <>
