@@ -1644,16 +1644,19 @@ async function runAll(tx) {
     eq(entry.method, "card", "the method copied into the cash book");
   });
 
-  await step("a Rocket partner receipt must settle a linked finance case, not a free-standing ledger entry", async () => {
-    await as(tx, U.salesA);
-    await expectError(
-      tx,
-      "unlinked Rocket partner receipt",
-      "partner_payment",
-      [partner.id, brA.id, "received", 400, "rocket", "wallet remittance"],
-      "Direct partner receipts are disabled; settle the linked finance case in Finance",
-    );
-  });
+  await step(
+    "a Rocket partner receipt must settle a linked finance case, not a free-standing ledger entry",
+    async () => {
+      await as(tx, U.salesA);
+      await expectError(
+        tx,
+        "unlinked Rocket partner receipt",
+        "partner_payment",
+        [partner.id, brA.id, "received", 400, "rocket", "wallet remittance"],
+        "Direct partner receipts are disabled; settle the linked finance case in Finance",
+      );
+    },
+  );
 
   await step("a payment method the shop does not take is refused", async () => {
     const item = await mintItem(brA.id);
