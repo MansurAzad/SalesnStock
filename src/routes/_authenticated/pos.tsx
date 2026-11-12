@@ -262,15 +262,15 @@ function POS() {
       const { data: saleId, error } =
         saleType === "installment"
           ? await supabase.rpc("create_partner_financed_sale", {
-            _branch: branch,
-            _customer: customerId as string,
-            _items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
-            _down_payment: baseDownPayment,
-            _down_payment_discount: discountAmount,
-            _method: method,
-            _partner: financePartner,
-            _payer_name: payerName.trim() || null,
-            _ref: null,
+              _branch: branch,
+              _customer: customerId as string,
+              _items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
+              _down_payment: baseDownPayment,
+              _down_payment_discount: discountAmount,
+              _method: method,
+              _partner: financePartner,
+              _payer_name: payerName.trim() || null,
+              _ref: null,
               _discount_reason: reason.trim(),
             })
           : await supabase.rpc("create_sale", saleArgs);
