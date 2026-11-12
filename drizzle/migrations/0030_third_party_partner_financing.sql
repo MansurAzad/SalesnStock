@@ -29,6 +29,22 @@ REVOKE ALL ON FUNCTION public.guard_partner_financed_installment_plan() FROM PUB
 ALTER TABLE public.finance_cases
   ADD COLUMN IF NOT EXISTS payer_name text;
 
+ALTER TABLE public.sales
+  ADD COLUMN IF NOT EXISTS down_payment_discount numeric NOT NULL DEFAULT 0;
+
+DO $
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'chk_sales_down_payment_discount'
+      AND conrelid = 'public.sales'::regclass
+  ) THEN
+    ALTER TABLE public.sales
+      ADD CONSTRAINT chk_sales_down_payment_discount CHECK (down_payment_discount >= 0);
+  END IF;
+END;
+$;
+
 CREATE OR REPLACE FUNCTION public.create_partner_financed_sale(
   _branch uuid,
   _customer uuid,
@@ -117,6 +133,10 @@ BEGIN
     _discount_reason
   );
   PERFORM set_config('app.partner_financing_workflow', 'off', true);
+
+  UPDATE public.sales
+  SET down_payment_discount = coalesce(_down_payment_discount, 0)
+  WHERE id = v_sale;
 
   DELETE FROM public.installments
   WHERE plan_id IN (SELECT id FROM public.installment_plans WHERE sale_id = v_sale);
