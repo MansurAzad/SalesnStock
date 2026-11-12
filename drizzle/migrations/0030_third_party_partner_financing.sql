@@ -6,14 +6,14 @@ RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
-AS $
+AS $$
 BEGIN
   IF current_setting('app.partner_financing_workflow', true) IS DISTINCT FROM 'on' THEN
     RAISE EXCEPTION 'Customer installment plans are disabled; use a financial partner sale';
   END IF;
   RETURN NEW;
 END;
-$;
+$$;
 
 DROP TRIGGER IF EXISTS trg_guard_partner_financed_installment_plan ON public.installment_plans;
 CREATE TRIGGER trg_guard_partner_financed_installment_plan
@@ -254,11 +254,11 @@ RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
-AS $
+AS $$
 BEGIN
   RAISE EXCEPTION 'Customer installments are collected directly by the financial partner; showroom collection is disabled';
 END;
-$;
+$$;
 
 REVOKE ALL ON FUNCTION public.pay_installment(uuid, numeric) FROM authenticated;
 REVOKE ALL ON FUNCTION public.pay_installment(uuid, numeric, text) FROM authenticated;
