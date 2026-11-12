@@ -16,9 +16,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAllPages } from "@/lib/paginated-query";
-import { EXPENSE_METHODS, methodLabel } from "@/lib/payment-methods";
+import { PAYMENT_METHODS, methodLabel } from "@/lib/payment-methods";
 
-/** Partner balance: what the partner still owes the showroom. */
+/** Partner balance: the unpaid receivable owed to the showroom by the partner. */
 export function partnerBalance(
   cases: { amount: number; commission: number; status: string }[],
   ledger: { kind: string; amount: number }[],
@@ -34,14 +34,13 @@ export function partnerBalance(
   const received = ledger
     .filter((l) => l.kind === "received")
     .reduce((s, l) => s + Number(l.amount), 0);
-  const paid = ledger.filter((l) => l.kind === "paid").reduce((s, l) => s + Number(l.amount), 0);
-  return owed - received + paid;
+  return owed - received;
 }
 
 export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: boolean }) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [f, setF] = useState({ partner: "", kind: "paid", amount: "", method: "cash", note: "" });
+  const [f, setF] = useState({ partner: "", amount: "", method: "bank", note: "" });
   const { data } = useQuery({
     queryKey: ["partner-accounts", branch],
     enabled: !!branch,
@@ -66,7 +65,7 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
   const partners = data?.partners ?? [];
   async function save() {
     if (branch === "all" || !branch) {
-      toast.error("Choose one branch before recording a partner payment");
+      toast.error("Choose one branch before recording a partner receipt");
       return;
     }
     if (!f.partner) {
@@ -81,7 +80,7 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
     const { error } = await supabase.rpc("partner_payment", {
       _partner: f.partner,
       _branch: branch,
-      _kind: f.kind,
+      _kind: "received",
       _amount: amount,
       _method: f.method,
       _note: f.note,
@@ -90,7 +89,7 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
       toast.error(error.message);
       return;
     }
-    toast.success(f.kind === "paid" ? "Payment to partner saved" : "Receipt from partner saved");
+    toast.success("Receipt from partner saved");
     setF({ ...f, amount: "", note: "" });
     qc.invalidateQueries();
   }
@@ -116,18 +115,6 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
             </select>
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">Type</Label>
-            <select
-              aria-label="Payment type"
-              className="w-56 rounded-md border bg-background px-2 py-2 text-sm"
-              value={f.kind}
-              onChange={(e) => setF({ ...f, kind: e.target.value })}
-            >
-              <option value="paid">Pay partner (cash out)</option>
-              <option value="received">Receive from partner (cash in)</option>
-            </select>
-          </div>
-          <div className="space-y-1">
             <Label className="text-xs">Amount ৳</Label>
             <Input
               type="number"
@@ -147,7 +134,7 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
               value={f.method}
               onChange={(e) => setF({ ...f, method: e.target.value })}
             >
-              {EXPENSE_METHODS.map((m) => (
+              {PAYMENT_METHODS.map((m) => (
                 <option key={m} value={m}>
                   {methodLabel(m)}
                 </option>
@@ -177,7 +164,6 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
           <TableRow>
             <TableHead>Partner</TableHead>
             <TableHead className="text-right">Received</TableHead>
-            <TableHead className="text-right">Paid to partner</TableHead>
             <TableHead className="text-right">Partner owes us</TableHead>
           </TableRow>
         </TableHeader>
@@ -202,17 +188,16 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
                     </button>
                   </TableCell>
                   <TableCell className="text-right tabular">{taka(sum("received"))}</TableCell>
-                  <TableCell className="text-right tabular">{taka(sum("paid"))}</TableCell>
                   <TableCell className="text-right tabular font-semibold">
                     {taka(partnerBalance(cs, ls))}
                   </TableCell>
                 </TableRow>
                 {open && (
                   <TableRow>
-                    <TableCell colSpan={4} className="bg-muted/40">
+                    <TableCell colSpan={3} className="bg-muted/40">
                       {ls.length === 0 ? (
                         <span className="text-sm text-muted-foreground">
-                          No money movements with {p.name} yet.
+                          No partner receipts with {p.name} yet.
                         </span>
                       ) : (
                         <div className="space-y-1">
@@ -226,7 +211,7 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
                             >
                               <span>
                                 {new Date(l.created_at).toLocaleString()} ·{" "}
-                                {l.kind === "received" ? "Received" : "Paid to partner"}
+                                {l.kind === "received" ? "Received" : "Legacy outgoing entry"}
                                 {l.note ? ` — ${l.note}` : ""}
                               </span>
                               <span className="tabular">
@@ -245,7 +230,7 @@ export function PartnerAccounts({ branch, canAdd }: { branch: string; canAdd: bo
           })}
           {!partners.length && (
             <TableRow>
-              <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
+              <TableCell colSpan={3} className="py-6 text-center text-muted-foreground">
                 No finance partners yet — add them on the Finance page.
               </TableCell>
             </TableRow>
