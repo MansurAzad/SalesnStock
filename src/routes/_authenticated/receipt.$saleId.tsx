@@ -146,7 +146,11 @@ function ReceiptPage() {
     <div
       className={`flex items-center gap-3 ${small ? "flex-col text-center" : "border-b-2 border-foreground pb-3"}`}
     >
-      {<img src={logoSrc(s?.logo_url)} alt="" className={small ? "h-7 max-w-[72px] object-contain" : "h-8 max-w-[100px] object-contain"} />}
+      <img
+        src={logoSrc(s?.logo_url)}
+        alt=""
+        className={small ? "h-7 max-w-[72px] object-contain" : "h-8 max-w-[100px] object-contain"}
+      />
       <div className={small ? "" : "flex-1"}>
         <div className={small ? "text-base font-bold" : "text-2xl font-bold"}>
           {s?.company_name ?? "Dealer ERP"}
@@ -171,7 +175,8 @@ function ReceiptPage() {
           <b>{T("Invoice no")}:</b> {sale.invoice_no}
         </div>
         <div>
-          <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Partner-financed sale")} · {sale.payment_method}
+          <b>{T("Type")}:</b>{" "}
+          {T(sale.sale_type === "cash" ? "Cash sale" : "Partner-financed sale")} · {sale.payment_method}
         </div>
         {financeCase?.finance_partners?.name && (
           <div>
