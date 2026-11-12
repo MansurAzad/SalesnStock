@@ -57,6 +57,7 @@ const BN: Record<string, string> = {
   "Financed (kisti)": "কিস্তিতে বাকি",
   Due: "বকেয়া",
   "Partner receivable": "ফাইন্যান্স পার্টনারের পাওনা",
+  "Price adjustment": "মূল্য সমন্বয়",
   "Financial partner": "ফাইন্যান্স পার্টনার",
   "Kisti schedule": "কিস্তির তালিকা",
   "Due date": "নির্ধারিত তারিখ",
@@ -235,13 +236,26 @@ function ReceiptPage() {
     </table>
   );
 
+  const discountRows: [string, number][] = [];
+  if (sale.sale_type === "cash") {
+    discountRows.push(["Discount", -Number(sale.discount)]);
+  } else {
+    const priceAdjustment = Math.max(
+      Number(sale.discount) - Number(sale.down_payment_discount),
+      0,
+    );
+    if (priceAdjustment > 0) discountRows.push(["Price adjustment", -priceAdjustment]);
+    discountRows.push(["Down payment discount", -Number(sale.down_payment_discount)]);
+  }
+  const summaryRows: [string, number][] = [
+    ["Subtotal", Number(sale.subtotal)],
+    ...discountRows,
+    ["Total", Number(sale.total)],
+  ];
+
   const Pay = (
     <div className={`mt-2 text-xs tabular ${small ? "" : "ml-auto w-64"}`}>
-      {[
-        ["Subtotal", sale.subtotal],
-        [sale.sale_type === "cash" ? "Discount" : "Down payment discount", -Number(sale.discount)],
-        ["Total", sale.total],
-      ].map(([l, v]) => (
+      {summaryRows.map(([l, v]) => (
         <div
           key={String(l)}
           className={`flex justify-between ${l === "Total" ? "border-t border-foreground pt-1 font-bold" : ""}`}
