@@ -52,7 +52,8 @@ function POS() {
   const [saleType, setSaleType] = useState<"cash" | "installment">("cash");
   const [method, setMethod] = useState("cash");
   const [down, setDown] = useState("0");
-  const [months, setMonths] = useState("6");
+  const [financePartner, setFinancePartner] = useState("");
+  const [payerName, setPayerName] = useState("");
   const [phone, setPhone] = useState("");
   const [custName, setCustName] = useState("");
   const [nid, setNid] = useState("");
@@ -79,6 +80,18 @@ function POS() {
     },
   });
   const { data: branches = [] } = useBranches();
+  const { data: financePartners = [] } = useQuery({
+    queryKey: ["finance-partners-active"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("finance_partners")
+        .select("id,name")
+        .eq("active", true)
+        .order("name");
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
   const maxDiscountPct = Number(branches.find((b) => b.id === branch)?.max_discount_pct ?? 0);
 
   const soldOffline = offlineSoldIds(box.ops);
@@ -109,7 +122,8 @@ function POS() {
   const subtotal = cart.reduce((a, c) => a + c.price, 0);
   const listSubtotal = cart.reduce((a, c) => a + c.list_price, 0);
   const cartCost = cart.reduce((a, c) => a + c.cost, 0);
-  const discountAmount = Math.min(Math.max(num(discount), 0), subtotal);
+  const baseDownPayment = saleType === "installment" ? Math.min(Math.max(num(down), 0), subtotal) : 0;
+  const discountAmount = Math.min(Math.max(num(discount), 0), saleType === "installment" ? baseDownPayment : subtotal);
   const total = Math.max(0, subtotal - discountAmount);
   // The server measures the discount against the catalogue price, so an edited line price
   // counts as a discount too and needs a reason.
@@ -119,13 +133,12 @@ function POS() {
   const belowCost = cart.length > 0 && total < cartCost;
   const needsReason = discountAmount > 0 || effectiveDiscount > 0 || belowCost;
   // …and above the branch limit the sale has to be approved by a manager.
-  const discountLimit = Math.round(listSubtotal * maxDiscountPct) / 100;
+  const discountLimit = Math.round((saleType === "installment" ? baseDownPayment : listSubtotal) * maxDiscountPct) / 100;
   const needsApproval = effectiveDiscount > discountLimit || belowCost;
   const canApprove =
     !!me && (me.canWriteHq || (me.branch_id === branch && me.roles.includes("branch_manager")));
-  const downPayment = Math.min(Math.max(num(down), 0), total);
-  const financed = total - downPayment;
-  const monthly = saleType === "installment" && Number(months) > 0 ? financed / Number(months) : 0;
+  const downPayment = saleType === "installment" ? baseDownPayment - discountAmount : 0;
+  const financed = saleType === "installment" ? subtotal - baseDownPayment : 0;
 
   function add(imei: string) {
     const it = stock.find((s) => matchesImei(s.imei, imei) || matchesImei(s.imei2, imei));
@@ -190,6 +203,7 @@ function POS() {
     setBusy(true);
     try {
       if (!navigator.onLine) {
+        if (saleType === "installment") throw new Error("Partner-financed sales require an internet connection. Please reconnect before checkout.");
         await queueOffline();
         return;
       }
@@ -215,7 +229,7 @@ function POS() {
         if (error) throw error;
         customerId = data.id;
       }
-      const { data: saleId, error } = await supabase.rpc("create_sale", {
+      const saleArgs = {
         _branch: branch,
         _customer: customerId as string,
         _items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
@@ -223,9 +237,23 @@ function POS() {
         _paid: saleType === "cash" ? total : downPayment,
         _method: method,
         _sale_type: saleType,
-        _months: saleType === "installment" ? Number(months) : (null as unknown as number),
+        _months: null as unknown as number,
         _discount_reason: reason.trim(),
-      });
+      };
+      const { data: saleId, error } = saleType === "installment"
+        ? await supabase.rpc("create_partner_financed_sale", {
+            _branch: branch,
+            _customer: customerId as string,
+            _items: cart.map((c) => ({ item_id: c.item_id, price: c.price })),
+            _down_payment: baseDownPayment,
+            _down_payment_discount: discountAmount,
+            _method: method,
+            _partner: financePartner,
+            _payer_name: payerName.trim() || null,
+            _ref: null,
+            _discount_reason: reason.trim(),
+          })
+        : await supabase.rpc("create_sale", saleArgs);
       if (error) throw error;
       toast.success("Sale completed");
       setCart([]);
@@ -238,7 +266,7 @@ function POS() {
       qc.invalidateQueries();
       if (saleId) navigate({ to: "/receipt/$saleId", params: { saleId } });
     } catch (e) {
-      if (isNetworkError(e)) {
+      if (isNetworkError(e) && saleType === "cash") {
         await queueOffline();
         return;
       }
@@ -370,7 +398,7 @@ function POS() {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label className="text-xs" htmlFor="pos-discount">
-                {t("Discount")}
+                {saleType === "installment" ? "Down payment discount" : t("Discount")}
               </Label>
               <Input
                 id="pos-discount"
@@ -418,7 +446,21 @@ function POS() {
             </div>
           </div>
           {saleType === "installment" && (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-2">
+              <div>
+                <Label className="text-xs">Financial partner</Label>
+                <Select value={financePartner} onValueChange={setFinancePartner}>
+                  <SelectTrigger><SelectValue placeholder="Select financial partner" /></SelectTrigger>
+                  <SelectContent>
+                    {financePartners.map((partner) => <SelectItem key={partner.id} value={partner.id}>{partner.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Payment sender / settlement brand (optional)</Label>
+                <Input value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="If payment comes under another brand" />
+              </div>
+            <div className="grid grid-cols-1 gap-2">
               <div>
                 <Label className="text-xs" htmlFor="pos-down">
                   Down payment
@@ -431,19 +473,6 @@ function POS() {
                   onChange={(e) => setDown(e.target.value)}
                 />
               </div>
-              <div>
-                <Label className="text-xs" htmlFor="pos-months">
-                  Months
-                </Label>
-                <Input
-                  id="pos-months"
-                  type="number"
-                  min={1}
-                  max={36}
-                  value={months}
-                  onChange={(e) => setMonths(e.target.value)}
-                />
-              </div>
             </div>
           )}
           <div className="space-y-1 border-t pt-3 text-sm tabular">
@@ -454,7 +483,10 @@ function POS() {
             <Row l={t("Discount")} v={"− " + taka(discountAmount)} />
             <Row l={t("Total")} v={taka(total)} big />
             {saleType === "installment" && (
-              <Row l={`${months} × monthly`} v={taka(monthly.toFixed(2))} />
+              <>
+                <Row l="Actual down payment received" v={taka(downPayment)} />
+                <Row l="Receivable from financial partner" v={taka(financed)} />
+              </>
             )}
           </div>
           <Button
@@ -469,8 +501,7 @@ function POS() {
               (saleType === "installment" &&
                 (!/^01\d{9}$/.test(phone) ||
                   financed <= 0 ||
-                  Number(months) < 1 ||
-                  Number(months) > 36 ||
+                  !financePartner ||
                   (!existing && !custName.trim())))
             }
             onClick={checkout}
