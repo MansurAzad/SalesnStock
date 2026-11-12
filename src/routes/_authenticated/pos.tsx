@@ -359,7 +359,7 @@ function POS() {
                 aria-pressed={saleType === s}
                 className={`rounded py-1.5 text-sm font-medium ${saleType === s ? "bg-card shadow-sm" : "text-muted-foreground"}`}
               >
-                {t(s === "cash" ? "Cash" : "Installment")}
+                {s === "cash" ? t("Cash") : "Partner finance"}
               </button>
             ))}
           </div>
