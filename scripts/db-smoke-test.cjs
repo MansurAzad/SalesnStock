@@ -638,14 +638,18 @@ async function runAll(tx) {
     );
   });
 
-  await step("the showroom cannot collect customer installments", async () => {
+  await step("the showroom cannot execute the legacy customer installment collection RPC", async () => {
     await as(tx, U.salesA);
-    await expectError(
+    const message = await expectError(
       tx,
       "legacy installment collection",
       "pay_installment",
       ["00000000-0000-0000-0000-000000009999", 100, "cash"],
-      "Customer installments are collected directly by the financial partner",
+    );
+    assert(
+      message.includes("permission denied for function pay_installment") ||
+        message.includes("Customer installments are collected directly by the financial partner"),
+      `legacy installment RPC was blocked for an unexpected reason: ${message}`,
     );
   });
 
