@@ -174,7 +174,10 @@ function ReceiptPage() {
           <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Kisti (installment)")} · {sale.payment_method}
         </div>
         {financeCase?.finance_partners?.name && (
-          <div><b>{T("Financial partner")}:</b> {financeCase.finance_partners.name}</div>
+          <div>
+            <b>{T("Financial partner")}:</b> {financeCase.finance_partners.name}
+            {financeCase.payer_name ? " · " + financeCase.payer_name : ""}
+          </div>
         )}
       </div>
       <div className={small ? "" : "text-right"}>
@@ -231,7 +234,7 @@ function ReceiptPage() {
     <div className={`mt-2 text-xs tabular ${small ? "" : "ml-auto w-64"}`}>
       {[
         ["Subtotal", sale.subtotal],
-        ["Discount", -Number(sale.discount)],
+        [sale.sale_type === "cash" ? "Discount" : "Down payment discount", -Number(sale.discount)],
         ["Total", sale.total],
       ].map(([l, v]) => (
         <div
