@@ -175,8 +175,7 @@ function ReceiptPage() {
           <b>{T("Invoice no")}:</b> {sale.invoice_no}
         </div>
         <div>
-          <b>{T("Type")}:</b>{" "}
-          {T(sale.sale_type === "cash" ? "Cash sale" : "Partner-financed sale")}{" "}
+          <b>{T("Type")}:</b> {T(sale.sale_type === "cash" ? "Cash sale" : "Partner-financed sale")}{" "}
           <span>· {sale.payment_method}</span>
         </div>
         {financeCase?.finance_partners?.name && (
