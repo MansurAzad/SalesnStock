@@ -474,6 +474,7 @@ function POS() {
                 />
               </div>
             </div>
+            </div>
           )}
           <div className="space-y-1 border-t pt-3 text-sm tabular">
             <Row l="Subtotal" v={taka(listSubtotal)} />
