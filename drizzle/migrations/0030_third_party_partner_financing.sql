@@ -170,3 +170,53 @@ $$;
 
 REVOKE ALL ON FUNCTION public.partner_payment(uuid, uuid, text, numeric, text, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.partner_payment(uuid, uuid, text, numeric, text, text) TO authenticated;
+
+
+-- A normal settlement must clear the full receivable. Do not silently classify
+-- an unexplained short payment as partner commission or as a completed case.
+CREATE OR REPLACE FUNCTION public.settle_finance(_case uuid, _received numeric, _method text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  c public.finance_cases;
+  m text;
+BEGIN
+  SELECT * INTO c FROM public.finance_cases WHERE id = _case FOR UPDATE;
+  IF c.id IS NULL THEN RAISE EXCEPTION 'Finance case not found'; END IF;
+  IF NOT public.can_operate_branch(auth.uid(), c.branch_id) THEN
+    RAISE EXCEPTION 'Not allowed for this branch';
+  END IF;
+  IF c.status <> 'pending' THEN RAISE EXCEPTION 'Finance case is not pending'; END IF;
+  IF _received IS NULL OR _received <= 0 OR _received <> c.amount THEN
+    RAISE EXCEPTION 'Settlement must equal the full partner receivable of %', c.amount;
+  END IF;
+
+  m := coalesce(nullif(trim(_method), ''), 'bank');
+  IF m NOT IN ('cash','bank','bkash','nagad','rocket','card','cheque','online') THEN
+    RAISE EXCEPTION 'Unknown payment method %', m;
+  END IF;
+
+  UPDATE public.finance_cases
+  SET status = 'settled', settled_at = now(), commission = 0
+  WHERE id = _case;
+
+  INSERT INTO public.transactions(branch_id, kind, category, amount, note, ref_id, method, created_by)
+  VALUES (c.branch_id, 'income', 'finance_settlement', _received,
+          coalesce(c.ref_no, '') || ' ' || c.customer_name, c.id, m, auth.uid());
+
+  INSERT INTO public.finance_partner_ledger(partner_id, branch_id, kind, amount, method, note, case_id, created_by)
+  VALUES (c.partner_id, c.branch_id, 'received', _received, m,
+          'Full settlement ' || coalesce(c.ref_no, ''), c.id, auth.uid());
+
+  INSERT INTO public.audit_logs(user_id, action, details)
+  VALUES (auth.uid(), 'settle_finance', jsonb_build_object(
+    'case', _case, 'partner', c.partner_id, 'amount', _received, 'method', m
+  ));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.settle_finance(uuid, numeric, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.settle_finance(uuid, numeric, text) TO authenticated;
