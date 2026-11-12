@@ -42,6 +42,7 @@ const EXPECTED_TABLES = [
 const EXPECTED_COLUMNS = [
   ["transactions", "method"],
   ["finance_cases", "payer_name"],
+  ["sales", "down_payment_discount"],
   ["products", "min_stock"],
   ["customers", "notes"],
   ["app_settings", "default_print_lang"],
