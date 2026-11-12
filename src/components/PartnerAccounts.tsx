@@ -61,8 +61,8 @@ export function PartnerAccounts({ branch }: { branch: string }) {
       <div className="mb-1 font-semibold">Finance partner receivables</div>
       <p className="mb-3 text-xs text-muted-foreground">
         Partner receipts are posted from the linked sale in Finance after the money reaches the
-        business bank account. This statement is read-only to prevent duplicate receipts or
-        outgoing partner payments.
+        business bank account. This statement is read-only to prevent duplicate receipts or outgoing
+        partner payments.
       </p>
       <Table>
         <TableHeader>
